@@ -82,6 +82,10 @@ async def lifespan(app: FastAPI):
 # Initialize the FastAPI app with the lifespan context
 app = FastAPI(lifespan=lifespan)
 
+@app.get("/")
+def root():
+    return {"message": "Backend is running. Use the appropriate API endpoints."}
+
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,

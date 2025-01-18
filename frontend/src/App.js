@@ -2,10 +2,15 @@ import React, { useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-function App() {
-  const [query, setQuery] = useState("");
-  const [response, setResponse] = useState("");
+// Backend URL setup
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
 
+function App() {
+  const [query, setQuery] = useState(""); // User input query
+  const [response, setResponse] = useState(""); // Backend response
+  const [error, setError] = useState(null); // Error handling
+
+  // Function to handle query submission
   const handleSubmit = async () => {
     if (!query.trim()) {
       alert("Please enter a query.");
@@ -13,14 +18,14 @@ function App() {
     }
 
     try {
-      const res = await axios.post("https://your-backend-url.vercel.app/query", {
-        prompt: query,
-        top_k: 5, // Modify if needed
-      });
+      // Send query to backend
+      const res = await axios.post(`${BACKEND_URL}/query`, { query });
       setResponse(res.data.response || "No response received.");
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      setResponse("An error occurred while fetching data.");
+      setError(null); // Clear any previous errors
+    } catch (err) {
+      console.error("Error fetching data:", err);
+      setResponse("");
+      setError("An error occurred while fetching data.");
     }
   };
 
@@ -34,9 +39,14 @@ function App() {
           onChange={(e) => setQuery(e.target.value)}
         />
         <button onClick={handleSubmit}>Submit Query</button>
+
         <div>
           <h2>Response:</h2>
-          <p>{response}</p>
+          {error ? (
+            <p className="error">{error}</p>
+          ) : (
+            <p>{response || "No response yet."}</p>
+          )}
         </div>
       </header>
     </div>

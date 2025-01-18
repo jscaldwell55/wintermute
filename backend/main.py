@@ -85,11 +85,20 @@ app = FastAPI(lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
+    allow_origins=["https://wintermute-ptbzw2ov3-jay-caldwells-projects.vercel.app/"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.post("/query")
+async def query_endpoint(data: dict):
+    query = data.get("query", "")
+    return {"response": f"Received query: {query}"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 @app.post("/memories")
 async def add_memory(request: AddMemoryRequest):

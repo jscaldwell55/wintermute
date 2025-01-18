@@ -85,7 +85,7 @@ app = FastAPI(lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://wintermute-ptbzw2ov3-jay-caldwells-projects.vercel.app/"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
+    allow_origins=["https://wintermute-sigma.vercel.app/"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

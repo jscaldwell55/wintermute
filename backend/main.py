@@ -89,16 +89,13 @@ def root():
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://wintermute-backend.vercel.app/"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
+    allow_origins=["https://wintermute-sigma.vercel.app/"],  # Replace "*" with specific domains like ["https://weweb.io"] for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.post("/query")
-async def query_endpoint(data: dict):
-    query = data.get("query", "")
-    return {"response": f"Received query: {query}"}
+
 
 if __name__ == "__main__":
     import uvicorn

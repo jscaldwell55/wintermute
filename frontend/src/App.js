@@ -3,7 +3,7 @@ import axios from "axios";
 import "./App.css";
 
 // Backend URL setup
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
 function App() {
   const [query, setQuery] = useState(""); // User input query
@@ -19,7 +19,8 @@ function App() {
 
     try {
       // Send query to backend
-      const res = await axios.post(`${BACKEND_URL}/query`, { query });
+      const res = await axios.post(`${REACT_APP_BACKEND_URL};
+      }/query`, { query });
       setResponse(res.data.response || "No response received.");
       setError(null); // Clear any previous errors
     } catch (err) {

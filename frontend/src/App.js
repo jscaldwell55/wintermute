@@ -16,17 +16,36 @@ function App() {
 
   // Function to handle query submission
   const handleSubmit = async () => {
+    if (!query.trim()) {
+      alert("Please enter a query.");
+      return;
+    }
+  
     try {
-      const res = await axios.post(`${BACKEND_URL}/query`, { 
-        prompt: query, 
-        top_k: 5 
-      });
+      const res = await axios.post(
+        `${BACKEND_URL}/query`, // Construct the API endpoint URL
+        { 
+          prompt: query, // Data payload for the backend
+          top_k: 5       // Optional parameter for backend processing
+        },
+        {
+          headers: {
+            "Content-Type": "application/json", // Ensure proper request header
+          },
+        }
+      );
+  
+      // Set response state
       setResponse(res.data.response || "No response received.");
+      setError(null); // Clear any previous errors
     } catch (err) {
+      // Handle error and log details for debugging
       console.error("Error fetching data:", err);
       setResponse("An error occurred while fetching data.");
+      setError(err.message || "An unknown error occurred.");
     }
   };
+  
   
   
 

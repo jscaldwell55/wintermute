@@ -23,7 +23,7 @@ function App() {
   
     try {
       const res = await axios.post(
-        `${BACKEND_URL}/query`, // Construct the API endpoint URL
+        `${BACKEND_URL}/query`, 
         { 
           prompt: query, // Data payload for the backend
           top_k: 5       // Optional parameter for backend processing

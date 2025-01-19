@@ -115,28 +115,19 @@ async def add_memory(request: AddMemoryRequest):
 
 @app.post("/query")
 async def query_memory(request: QueryMemoryRequest):
-    """
-    Handles memory retrieval and generates a GPT response based on the query.
-    """
     try:
-        # Construct combined prompt
         combined_prompt = await memory_system.generate_combined_prompt(
             request.prompt, top_k=request.top_k
         )
-
-        # Generate GPT response
         gpt_response = await llm_service.generate_gpt_response_async(
             prompt=combined_prompt,
             model="gpt-3.5-turbo",
             temperature=0.7,
             max_tokens=500,
         )
-
-        # Save the interaction as a new memory using add_interaction_memory
         await memory_system.add_interaction_memory(request.prompt, gpt_response)
-
+        logger.info(f"Returning response: {gpt_response}")
         return {"query": request.prompt, "response": gpt_response}
-
     except Exception as e:
         logger.error(f"Error processing query: {e}")
         raise HTTPException(status_code=500, detail="An error occurred while processing your request.")

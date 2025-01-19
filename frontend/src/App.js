@@ -16,22 +16,19 @@ function App() {
 
   // Function to handle query submission
   const handleSubmit = async () => {
-    if (!query.trim()) {
-      alert("Please enter a query.");
-      return;
-    }
-
     try {
-      // Send query to backend
-      const res = await axios.post(`${BACKEND_URL}/query`, { query });
+      const res = await axios.post(`${BACKEND_URL}/query`, { 
+        prompt: query, 
+        top_k: 5 
+      });
       setResponse(res.data.response || "No response received.");
-      setError(null); // Clear any previous errors
     } catch (err) {
       console.error("Error fetching data:", err);
-      setResponse("");
-      setError("An error occurred while fetching data.");
+      setResponse("An error occurred while fetching data.");
     }
   };
+  
+  
 
   return (
     <div className="App">

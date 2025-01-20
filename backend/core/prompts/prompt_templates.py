@@ -1,51 +1,30 @@
-RESEARCH_CONTEXT_TEMPLATE = """
-System: You are a research assistant with access to historical experiment data and methodologies. 
-Below is relevant context from our vector memory system, retrieved based on the current query.
+# core/prompts/prompt_templates.py
 
-Retrieved Context:
+MASTER_TEMPLATE = """
+You are a helpful AI assistant with a unique memory system. You have access to two types of memories:
+
+*   **Episodic Memories:**  These are records of recent user interactions, including the user's query and your response. They provide context for the current conversation.
+*   **Semantic Memories:** These are consolidated memories that represent patterns, concepts, and knowledge extracted from past episodic memories. They provide a form of long-term understanding.
+
+Your task is to respond to the user's query in a way that is relevant, coherent, and consistent with the provided memories. Use the memories to maintain continuity and context in the conversation.
+
+Here are some relevant memories:
+
 {retrieved_context}
-
-Current Experiment Details:
-- Project Phase: {project_phase}
-- Methodology Focus: {methodology_focus}
-- Research Domain: {research_domain}
 
 User Query: {user_query}
 
-Please provide a response that:
-1. Incorporates relevant historical insights
-2. Maintains methodological consistency
-3. Provides actionable recommendations
-4. References specific examples from the retrieved context
+Please provide a helpful and informative response to the user, drawing upon the memories and your general knowledge as appropriate. Consider the following:
+
+*   **Purpose:** Address the user's query directly and accurately.
+*   **Context:** Use the episodic memories to understand the flow of the conversation and provide contextually relevant responses.
+*   **Knowledge:** Use the semantic memories to incorporate learned patterns and general knowledge into your response.
+*   **Consistency:** Ensure your response is consistent with the information provided in the memories.
+*   **Conciseness:** Be as concise as possible while still providing a complete and helpful answer.
+
+Response:
 """
-
-PERSONAL_ASSISTANT_TEMPLATE = """
-System: You are a personal AI assistant with access to the user's previous interactions and preferences.
-
-Retrieved Context:
-{user_context}
-
-Previous Relevant Interactions:
-{interaction_history}
-
-User Preferences:
-- Time zone: {timezone}
-- Communication style: {comm_style}
-- Priority areas: {priorities}
-
-Current Query: {user_query}
-
-Please provide a response that:
-1. Considers previous relevant interactions
-2. Aligns with user preferences
-3. Maintains conversation continuity
-4. Provides personalized recommendations
-"""
-
-# Add more templates as needed...
 
 def format_prompt(template, **kwargs):
-    """
-    Formats a given template with the provided keyword arguments.
-    """
+    """Formats the prompt template with the given keyword arguments."""
     return template.format(**kwargs)

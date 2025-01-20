@@ -84,36 +84,104 @@ class PineconeService:
             logger.error(f"Error upserting memory: {str(e)}")
             raise RuntimeError(f"Error upserting memory: {str(e)}")
 
-    async def query_memory(self, query_vector: np.ndarray, query_type: MemoryType, k: int = 5) -> List[Tuple[Memory, float]]:
+    async def upsert_batch_memories(self, memories: List[Dict[str, Any]]):
+        """
+        Upserts a batch of memory vectors into Pinecone.
+
+        Args:
+            memories: A list of dictionaries, each representing a memory with 'id', 'values', and 'metadata'.
+        """
+        try:
+            if not self.index:
+                await self.initialize_index()
+
+            # Validate the batch of memories
+            for memory in memories:
+                if not isinstance(memory, dict):
+                    raise ValueError("Each memory in the batch must be a dictionary.")
+                if not memory.get("id") or not isinstance(memory["id"], str):
+                    raise ValueError("Each memory must have an 'id' which is a non-empty string.")
+                if (
+                    not memory.get("values")
+                    or not isinstance(memory["values"], (list, np.ndarray))
+                    or len(memory["values"]) != 1536
+                ):
+                    raise ValueError(
+                        "Each memory must have 'values' which is a list or numpy array with 1536 dimensions."
+                    )
+                if not isinstance(memory.get("metadata", {}), dict):
+                    raise ValueError("Each memory's 'metadata' must be a dictionary.")
+
+            # Convert numpy arrays to lists if necessary
+            upsert_data = [
+                {
+                    "id": memory["id"],
+                    "values": memory["values"].tolist()
+                    if isinstance(memory["values"], np.ndarray)
+                    else memory["values"],
+                    "metadata": memory["metadata"],
+                }
+                for memory in memories
+            ]
+
+            logger.info(f"Upserting batch of {len(upsert_data)} memories to Pinecone.")
+            response = self.index.upsert(vectors=upsert_data)
+            logger.debug(f"Successfully upserted batch of memories.")
+
+        except Exception as e:
+            logger.error(f"Error upserting batch memories: {str(e)}")
+            raise RuntimeError(f"Error upserting batch memories: {str(e)}")
+
+    async def query_memory(
+        self,
+        query_vector: List[float],
+        query_types: List[MemoryType],
+        k: int = 5,
+        window_id: Optional[str] = None,
+    ) -> List[Tuple[Memory, float]]:
         """
         Queries the memory system with optional metadata filtering.
 
         Args:
             query_vector: The semantic vector of the query.
-            query_type: The type of memory to prioritize (TEMPORAL or GROUNDING).
+            query_types: The type of memory to prioritize (EPISODIC or SEMANTIC).
             k: Number of top results to return.
 
         Returns:
             List[Tuple[Memory, float]]: Retrieved memories with similarity scores.
         """
         try:
-            # Build metadata filter based on query type (e.g., TEMPORAL or GROUNDING)
-            filters = self.build_metadata_filter(query_type)
+            if not self.index:
+                await self.initialize_index()
 
-            # Query Pinecone with filters
-            results = await self.pinecone_service.query_memory(
-                query_vector=query_vector.tolist(),
+            # Convert MemoryType enums to their string values
+            query_type_values = [
+                query_type.value for query_type in query_types
+            ]
+
+            # Build metadata filter
+            filters = {}
+            if query_type_values:
+                filters["memory_type"] = {"$in": query_type_values}
+            if window_id:
+                filters["window_id"] = window_id
+
+            # Perform the query
+            results = self.index.query(
+                vector=query_vector,
                 top_k=k,
-                filters=filters
+                filter=filters,
+                include_metadata=True,
             )
 
-            # Process results
+            # Convert results to Memory objects with scores
             memories_with_scores = [
                 (self._create_memory_from_result(result), result["score"])
-                for result in results
+                for result in results.get("matches", [])
             ]
 
             return memories_with_scores
+
         except Exception as e:
             logger.error(f"Error querying memory: {e}")
             return []
@@ -141,7 +209,7 @@ class PineconeService:
             start_cursor = None
 
             while True:
-                results = await self.index.query(
+                results = self.index.query(
                     vector=query_vector,
                     top_k=top_k,
                     include_values=True,
@@ -164,3 +232,49 @@ class PineconeService:
         except Exception as e:
             logger.error(f"Error fetching memories with metadata: {e}")
             raise RuntimeError(f"Error fetching memories with metadata: {e}")
+
+    def _create_memory_from_result(self, result: Dict[str, Any]) -> Memory:
+        """Creates a Memory object from a Pinecone query result."""
+        metadata = result.get("metadata", {})
+        memory_type_str = metadata.get("memory_type")
+
+        # Use get method with default value to avoid KeyError
+        memory_type_str = metadata.get("memory_type")
+
+        # Convert the string to a MemoryType enum member, defaulting to EPISODIC if not found
+        try:
+            memory_type = MemoryType(memory_type_str)
+        except ValueError:
+            logger.warning(
+                f"Unrecognized memory type '{memory_type_str}'. Using default type."
+            )
+            memory_type = MemoryType.EPISODIC  # Use EPISODIC as the default type
+
+        return Memory(
+            id=result.get("id", ""),
+            content=metadata.get("content", ""),
+            created_at=metadata.get("created_at", datetime.now().isoformat()),
+            memory_type=memory_type,
+            semantic_vector=result.get("values", []),
+            metadata=metadata,
+            window_id=metadata.get("window_id"),
+        )
+
+    async def get_memory_by_id(self, memory_id: str) -> Optional[Memory]:
+        """Retrieves a memory from Pinecone by its ID."""
+        try:
+            if not self.index:
+                await self.initialize_index()
+
+            fetch_response = self.index.fetch(ids=[memory_id])
+            vectors = fetch_response.get("vectors")
+            if vectors and memory_id in vectors:
+                result = vectors[memory_id]
+                return self._create_memory_from_result(result)
+            else:
+                logger.warning(f"Memory with ID '{memory_id}' not found.")
+                return None
+
+        except Exception as e:
+            logger.error(f"Error fetching memory by ID: {e}")
+            return None

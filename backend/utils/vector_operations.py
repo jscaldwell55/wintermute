@@ -2,50 +2,53 @@ import numpy as np
 from typing import Dict, Any, List, Optional
 from scipy.spatial.distance import cosine, euclidean
 import logging
-import openai
+import asyncio
+from core.memory.models import Memory, MemoryType
 import os
-from dataclasses import dataclass
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
 class VectorOperations:
     """Vector operations for memory processing and analysis."""
 
-    async def create_semantic_vector(self, text: str) -> np.ndarray:
+    def __init__(self):
+      self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+    async def create_semantic_vector(self, text: str) -> List[float]:
         """
         Create a semantic vector from text using OpenAI's embedding model.
-        This function now utilizes generate_embedding internally.
         """
         try:
             embedding = await self.generate_embedding(text)
             logger.info(f"Length of embedding list: {len(embedding)}")
             vector = np.array(embedding)
             logger.info(f"Created semantic vector with dimensions: {vector.shape}")
-            return vector
+            return embedding
         except Exception as e:
             logger.error(f"Error creating semantic vector: {e}")
             raise
 
-    async def generate_embedding(self, text: str, model: str = "text-embedding-ada-002") -> list:
+    async def generate_embedding(self, text: str, model: str = "text-embedding-3-small") -> List[float]:
         """
         Generates an embedding vector for the given text using OpenAI API.
         """
         try:
-            openai.api_key = os.getenv("OPENAI_API_KEY")
-            if not openai.api_key:
-                raise ValueError("OpenAI API key not configured.")
-
-            response = openai.embeddings.create(input=text, model=model)
+            response = self.client.embeddings.create(input=text, model=model)
             embedding = response.data[0].embedding
             if len(embedding) != 1536:
                 logger.warning(f"Unexpected embedding dimensionality: {len(embedding)}")
             return embedding
-        except openai.OpenAIError as e:
-            logger.error(f"OpenAI API error in generate_embedding: {e}")
-            raise
         except Exception as e:
-            logger.error(f"Unexpected error in generate_embedding: {e}")
+            logger.error(f"Error in generate_embedding: {e}")
             raise
+
+    async def create_combined_q_r_vector(self, query: str, response: str) -> List[float]:
+        """
+        Creates a single vector from a Q/R pair.
+        """
+        combined_text = f"Q: {query}\nA: {response}"
+        return await self.create_semantic_vector(combined_text)
 
     def average_vectors(self, vectors: List[np.ndarray]) -> np.ndarray:
         """Calculates the average of a list of vectors."""
@@ -73,20 +76,6 @@ class VectorOperations:
 
         similarity = dot_product / (magnitude_vector1 * magnitude_vector2)
         return similarity
-
-    @staticmethod
-    def decay_vector(vector: np.ndarray, decay_factor: float) -> np.ndarray:
-        """Apply decay to a vector based on time."""
-        try:
-            magnitude = np.linalg.norm(vector)
-            decayed_magnitude = magnitude * decay_factor
-            normalized = vector / magnitude if magnitude > 0 else vector
-            decayed_vector = normalized * decayed_magnitude
-            logger.debug(f"Vector decayed by factor {decay_factor}.")
-            return decayed_vector
-        except Exception as e:
-            logger.error(f"Error applying decay to vector: {e}", exc_info=True)
-            raise
 
     @staticmethod
     def normalize_vector(vector: np.ndarray) -> np.ndarray:

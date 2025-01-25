@@ -4,15 +4,15 @@ from sklearn.metrics import silhouette_score
 import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
-from backend.core.memory.models import Memory, MemoryType
-from backend.core.evaluation import MemoryEvaluation
-from backend.utils.vector_operations import VectorOperations
+from api.core.memory.models import Memory, MemoryType
+from api.core.evaluation import MemoryEvaluation
+from api.utils.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os
 import project_root.backend.api.utils.config as config
-from backend.utils.task_queue import task_queue
-import backend.utils.llm_service as llm_service
+from api.utils.task_queue import task_queue
+import api.utils.llm_service as llm_service
 from transformers import pipeline
 
 logger = logging.getLogger(__name__)

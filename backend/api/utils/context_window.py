@@ -2,8 +2,8 @@ import tiktoken
 import logging
 import uuid
 import project_root.backend.api.utils.config as config
-from backend.utils.task_queue import task_queue
-import backend.utils.llm_service as llm_service
+from api.utils.task_queue import task_queue
+import api.utils.llm_service as llm_service
 
 logger = logging.getLogger(__name__)
 

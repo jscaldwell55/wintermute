@@ -16,7 +16,7 @@ import numpy as np
 import uuid
 import asyncio
 import math
-import project_root.backend.api.utils.config as config
+import api.utils.config as config
 from api.utils.task_queue import task_queue
 
 logger = logging.getLogger(__name__)

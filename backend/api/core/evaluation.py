@@ -1,9 +1,9 @@
 import numpy as np
 from core.memory.models import Memory, MemoryType
-from project_root.backend.api.core.vector_operations import VectorOperations
+from api.core.vector_operations import VectorOperations
 from typing import Dict, List
 import logging
-import utils.llm_service as llm_service
+import api.utils.llm_service as llm_service
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)

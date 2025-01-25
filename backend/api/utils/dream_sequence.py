@@ -6,11 +6,11 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from api.core.memory.models import Memory, MemoryType
 from api.core.evaluation import MemoryEvaluation
-from project_root.backend.api.core.vector_operations import VectorOperations
+from api.core.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os
-import project_root.backend.api.utils.config as config
+import api.utils.config as config
 from api.utils.task_queue import task_queue
 import api.utils.llm_service as llm_service
 from transformers import pipeline

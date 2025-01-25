@@ -6,7 +6,7 @@ import asyncio
 from .memory.models import Memory, MemoryType
 import os
 from openai import OpenAI
-from ..utils import config
+from api.utils import config
 
 logger = logging.getLogger(__name__)
 

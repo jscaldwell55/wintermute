@@ -19,3 +19,6 @@ openai>=1.12.0
 fastapi
 uvicorn
 tenacity==8.2.3
+torch
+transformers
+scikit-learn==1.3.0

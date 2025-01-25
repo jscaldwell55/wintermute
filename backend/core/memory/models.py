@@ -21,6 +21,8 @@ class Memory(BaseModel):
     metadata: Dict[str, Any] = {} # Add metadata to pydantic model
     created_at: str
     window_id: Optional[str] = None  # Add window_id
+    state: Optional[str] = "new" # Add state tracking
+    quality_metrics: Optional[Dict[str, Any]] = None # Add quality metrics
 
     @field_validator("semantic_vector")
     def validate_vector(cls, v):

@@ -6,6 +6,7 @@ import asyncio
 from core.memory.models import Memory, MemoryType
 import os
 from openai import OpenAI
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ class VectorOperations:
     """Vector operations for memory processing and analysis."""
 
     def __init__(self):
-      self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+      self.client = OpenAI(api_key=config.LLM_API_KEY)
 
     async def create_semantic_vector(self, text: str) -> List[float]:
         """
@@ -88,3 +89,23 @@ class VectorOperations:
         except Exception as e:
             logger.error(f"Error normalizing vector: {e}", exc_info=True)
             raise
+    
+    def decay_vector(self, vector, created_at, decay_factor=config.MEMORY_DECAY_FACTOR, hours_since_decay=config.HOURS_SINCE_DECAY):
+        """
+        Decays a memory vector based on time.
+
+        Args:
+            vector: The memory vector (numpy array).
+            created_at: The timestamp when the memory was created.
+            decay_factor: The decay factor (applied per time unit).
+            hours_since_decay: The number of hours that represent a time unit for decay.
+
+        Returns:
+            The decayed vector.
+        """
+        now = time.time()
+        time_diff = now - created_at
+        hours_passed = time_diff / 3600  # Convert seconds to hours
+        decay_multiplier = decay_factor ** (hours_passed / hours_since_decay)
+        decayed_vector = vector * decay_multiplier
+        return decayed_vector

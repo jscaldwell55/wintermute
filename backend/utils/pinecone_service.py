@@ -4,9 +4,12 @@ import logging
 from pinecone import Pinecone, ServerlessSpec
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
+import config
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def initialize_pinecone(api_key: str, environment: str, index_name: str, dimension: int = 1536):
     """
     Initializes Pinecone and ensures the index exists.
@@ -47,7 +50,7 @@ class PineconeService:
     def __init__(self, api_key: str, environment: str):
         self.api_key = api_key
         self.environment = environment
-        self.index_name = os.getenv("INDEX_NAME")
+        self.index_name = config.PINECONE_INDEX_NAME
         if not self.index_name:
             raise RuntimeError("INDEX_NAME environment variable is not set.")
         self.index = None  # Initialize index as None
@@ -136,7 +139,7 @@ class PineconeService:
         self,
         query_vector: List[float],
         query_types: List[MemoryType],
-        k: int = 5,
+        top_k: int = 5,
         window_id: Optional[str] = None,
     ) -> List[Tuple[Memory, float]]:
         """
@@ -145,7 +148,7 @@ class PineconeService:
         Args:
             query_vector: The semantic vector of the query.
             query_types: The type of memory to prioritize (EPISODIC or SEMANTIC).
-            k: Number of top results to return.
+            top_k: Number of top results to return.
 
         Returns:
             List[Tuple[Memory, float]]: Retrieved memories with similarity scores.
@@ -169,7 +172,7 @@ class PineconeService:
             # Perform the query
             results = self.index.query(
                 vector=query_vector,
-                top_k=k,
+                top_k=top_k,
                 filter=filters,
                 include_metadata=True,
             )

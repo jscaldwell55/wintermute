@@ -8,8 +8,7 @@ from core.memory.models import Memory, MemoryType
 from utils.vector_operations import VectorOperations
 from utils.pinecone_service import PineconeService
 from core.prompts.prompt_templates import (
-    RESEARCH_CONTEXT_TEMPLATE,
-    PERSONAL_ASSISTANT_TEMPLATE,
+    MASTER_TEMPLATE,
     format_prompt,
 )
 import logging
@@ -17,6 +16,8 @@ import numpy as np
 import uuid
 import asyncio
 import math
+import config # Import config.py
+from core.utils.task_queue import task_queue
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class MemorySystem:
         memory_type: MemoryType,
         metadata: Optional[Dict[str, Any]] = None,
         window_id: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> str:
         """
         Adds a memory to the system, storing it directly in Pinecone.
@@ -63,7 +65,7 @@ class MemorySystem:
                 )
 
             # Generate a unique memory ID
-            memory_id = f"mem_{uuid.uuid4()}"
+            memory_id = task_id or f"mem_{uuid.uuid4()}"
 
             # Prepare metadata
             metadata = metadata or {}
@@ -123,20 +125,27 @@ class MemorySystem:
                 user_query, gpt_response
             )
 
-            # Create interaction memory with combined vector
-            await self.add_memory(
+            # Generate a unique task ID for the memory
+            task_id = f"mem_{uuid.uuid4()}"
+
+            # Enqueue the memory addition task with retries
+            task_queue.enqueue(
+                self.add_memory,
                 content=f"Q: {user_query}\nA: {gpt_response}",
                 memory_type=MemoryType.EPISODIC,
                 metadata={
                     "interaction": True,
                     "window_id": window_id
                 },
-                semantic_vector=combined_vector,  # Use combined vector
-                window_id=window_id  # Pass window_id to add_memory
+                semantic_vector=combined_vector,
+                window_id=window_id,
+                task_id=task_id,  # Pass the unique task ID
+                retries=config.SUMMARY_RETRIES,
+                retry_delay=config.SUMMARY_RETRY_DELAY
             )
 
             logger.info(
-                f"Interaction memory added to window {window_id}."
+                f"Interaction memory added to queue for window {window_id} with task ID {task_id}."
             )
 
         except Exception as e:
@@ -147,7 +156,7 @@ class MemorySystem:
         self,
         query_vector: List[float],
         query_types: List[MemoryType],
-        k: int = 5,
+        top_k: int = 5,
         window_id: Optional[str] = None,
     ) -> List[Tuple[Memory, float]]:
         """
@@ -156,7 +165,7 @@ class MemorySystem:
         Args:
             query_vector: The query vector.
             query_types: A list of MemoryTypes to query.
-            k: The number of top results to return.
+            top_k: The number of top results to return.
             window_id: Optional window ID to filter episodic memories.
 
         Returns:
@@ -173,7 +182,7 @@ class MemorySystem:
             )
             response = await self.pinecone_service.query_memory(
                 query_vector=query_vector,
-                top_k=k,
+                top_k=top_k,
                 filters=filters
             )
 
@@ -183,7 +192,7 @@ class MemorySystem:
                 (self._create_memory_from_result(result), result["score"])
                 for result in results
             ]
-            return self.rank_and_filter_results(memories_with_scores, k)
+            return self.rank_and_filter_results(memories_with_scores, top_k)
 
         except ValueError as e:
             logger.error(f"Error querying memory: {e}")
@@ -387,7 +396,7 @@ class MemorySystem:
             episodic_results = await self.query_memory(
                 query_vector=np.zeros(1536).tolist(),  # Dummy vector, not used in filtering
                 query_types=[MemoryType.EPISODIC],  # Filter for episodic memories
-                k=100,
+                top_k=100,
                 window_id=window_id,
             )
             # Convert results to Memory objects

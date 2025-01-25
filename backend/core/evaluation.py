@@ -1,71 +1,98 @@
-import logging
-from typing import Dict, List
+import numpy as np
 from core.memory.models import Memory, MemoryType
 from utils.vector_operations import VectorOperations
-from utils.llm_service import generate_gpt_response_async
-import numpy as np
+from typing import Dict, List
+import logging
+import utils.llm_service as llm_service
 
 logger = logging.getLogger(__name__)
 
 class MemoryEvaluation:
     """
-    Provides methods for evaluating the quality and significance of semantic memories.
+    Provides methods for evaluating the quality of semantic memories.
     """
 
     def __init__(self, vector_operations: VectorOperations, memory_system):
         self.vector_operations = vector_operations
         self.memory_system = memory_system
 
-    async def evaluate_semantic_memory(self, memory: Memory) -> Dict[str, float]:
+    async def evaluate_semantic_memory(self, semantic_memory: Memory, source_episodic_memories: List[Memory]) -> Dict:
         """
-        Evaluates a semantic memory across multiple metrics.
+        Evaluates the quality of a generated semantic memory.
 
         Args:
-            memory: The semantic memory to evaluate.
+            semantic_memory: The generated semantic memory.
+            source_episodic_memories: The episodic memories used to create the semantic memory.
 
         Returns:
-            A dictionary containing the evaluation scores for each metric.
+            A dictionary containing quality metrics.
         """
-        metrics = {
-            "coherence": await self._measure_coherence(memory),
-            "consistency": await self._measure_consistency(memory),
-            "novelty": await self._measure_novelty(memory),
-            "utility": await self._measure_utility(memory),  # Placeholder for a more complex metric
-        }
+        metrics = {}
+
+        # 1. Relevance (from new version - using source episodic memories)
+        if source_episodic_memories:
+            source_vectors = np.array([mem.semantic_vector for mem in source_episodic_memories])
+            avg_similarity = np.mean(self.vector_operations.cosine_similarity(semantic_memory.semantic_vector, source_vectors))
+            metrics["relevance"] = avg_similarity
+        else:
+            metrics["relevance"] = 0.0
+            logger.warning("No source episodic memories provided for relevance calculation.")
+
+        # 2. Conciseness (from new version - simple token count)
+        metrics["conciseness"] = len(semantic_memory.content.split())
+
+        # --- Metrics from the original version ---
+        # 3. Coherence (modified from original to use source episodic memories if available)
+        metrics["coherence"] = await self._measure_coherence(semantic_memory, source_episodic_memories)
+
+        # 4. Consistency (original)
+        metrics["consistency"] = await self._measure_consistency(semantic_memory)
+
+        # 5. Novelty (original)
+        metrics["novelty"] = await self._measure_novelty(semantic_memory)
+
+        # 6. Utility (original - placeholder)
+        metrics["utility"] = await self._measure_utility(semantic_memory)  # Placeholder for a more complex metric
+      
         return metrics
 
-    async def _measure_coherence(self, memory: Memory) -> float:
+    async def _measure_coherence(self, memory: Memory, source_episodic_memories: Optional[List[Memory]] = None) -> float:
         """
         Measures the internal coherence of a semantic memory.
 
-        Example: Calculates the average cosine similarity between the semantic vectors
-        of the episodic memories that contributed to this semantic memory.
+        Uses source episodic memories if provided, otherwise falls back to using source memory IDs from metadata.
         """
-        if not memory.metadata.get("source_memories"):
+        if source_episodic_memories:
+            source_vectors = [
+                np.array(mem.semantic_vector)
+                for mem in source_episodic_memories
+                if mem.semantic_vector is not None
+            ]
+        elif memory.metadata.get("source_episodic_memories"):
+            source_memory_ids = memory.metadata["source_episodic_memories"]
+
+            source_memories = [
+                await self.memory_system.get_memory_by_id(mem_id)
+                for mem_id in source_memory_ids
+                if await self.memory_system.get_memory_by_id(mem_id) is not None
+            ]
+
+            if not source_memories:
+                logger.warning(
+                    "Source memories not found for coherence measurement."
+                )
+                return 0.0
+            source_vectors = [
+                np.array(mem.semantic_vector)
+                for mem in source_memories
+                if mem.semantic_vector is not None
+            ]
+
+        else:
             logger.warning(
-                "Cannot measure coherence without source memories metadata."
+                "Cannot measure coherence without source memories or metadata."
             )
             return 0.0
-
-        source_memory_ids = memory.metadata["source_memories"]
-
-        source_memories = [
-            await self.memory_system.get_memory_by_id(mem_id)
-            for mem_id in source_memory_ids
-            if await self.memory_system.get_memory_by_id(mem_id) is not None
-        ]
-
-        if not source_memories:
-            logger.warning(
-                "Source memories not found for coherence measurement."
-            )
-            return 0.0
-
-        source_vectors = [
-            np.array(mem.semantic_vector)
-            for mem in source_memories
-            if mem.semantic_vector is not None
-        ]
 
         if not source_vectors:
             logger.warning(
@@ -83,7 +110,7 @@ class MemoryEvaluation:
                 similarities.append(similarity)
 
         return np.mean(similarities) if similarities else 0.0
-    
+
     async def _measure_consistency(self, memory: Memory) -> float:
         """
         Measures the consistency of a semantic memory with existing knowledge.
@@ -111,7 +138,7 @@ class MemoryEvaluation:
             existing_semantic_memories = await self.memory_system.query_memory(
                 np.array(memory.semantic_vector),  # Use the new semantic memory's vector
                 query_types=[MemoryType.SEMANTIC],
-                k=5  # Get top 5 most similar semantic memories
+                top_k=5  # Get top 5 most similar semantic memories
             )
             semantic_vectors = [
                 np.array(mem.semantic_vector) for mem, _ in existing_semantic_memories if mem.semantic_vector is not None
@@ -140,7 +167,7 @@ class MemoryEvaluation:
             similar_memories = await self.memory_system.query_memory(
                 np.array(memory.semantic_vector),
                 query_types=[MemoryType.SEMANTIC],
-                k=top_k,
+                top_k=top_k,
             )
             similarities = [similarity for _, similarity in similar_memories]
 
@@ -173,15 +200,15 @@ class MemoryEvaluation:
         """
         prompt = f"""
         Evaluate the following semantic memory on a scale of 0 to 1, where 1 is high quality:
-        
+
         Memory: {memory.content}
 
         Evaluation (0.0-1.0):
         """
         try:
-            response = await generate_gpt_response_async(
+            response = await llm_service.generate_gpt_response_async(
                 prompt=prompt,
-                model="gpt-3.5-turbo",
+                model=config.LLM_MODEL_NAME,
                 temperature=0.2,
                 max_tokens=50,
             )

@@ -1,19 +1,23 @@
 import tiktoken
 import logging
+import uuid
+import config
+from core.utils.task_queue import task_queue
+import utils.llm_service as llm_service
 
 logger = logging.getLogger(__name__)
 
 class ContextWindow:
     """Manages the context window for the active conversation."""
 
-    def __init__(self, total_tokens: int = 2048, reserved_tokens: int = 512):
+    def __init__(self, total_tokens: int = config.MAX_TOKENS_PER_CONTEXT_WINDOW, reserved_tokens: int = 512):
         self.total_tokens = total_tokens
         self.reserved_tokens = reserved_tokens
         self.available_tokens = self.total_tokens - self.reserved_tokens
         self.current_token_count = 0
-        self.encoding = tiktoken.encoding_for_model("gpt-3.5-turbo")
+        self.encoding = tiktoken.encoding_for_model(config.LLM_MODEL_NAME)
         self.template = ""
-        self.window_id = None
+        self.window_id = str(uuid.uuid4())
 
     def get_token_count(self, text: str) -> int:
         """Returns the number of tokens in the given text."""
@@ -30,6 +34,44 @@ class ContextWindow:
         else:
             return False
 
+    async def generate_window_summary(self, memories: list, window_id: str) -> str:
+        """
+        Generates a summary of the memories in the current context window using an LLM.
+
+        Args:
+            memories: A list of Memory objects representing the memories in the window.
+
+        Returns:
+            A string containing the generated summary.
+        """
+        if not memories:
+            return ""
+
+        # Build a prompt for the LLM to summarize the memories
+        memory_contents = [mem.content for mem in memories]
+        prompt = f"""
+        Summarize the following conversation excerpts:
+
+        {' '.join(memory_contents)}
+
+        Summary:
+        """
+
+        try:
+            summary = await llm_service.generate_gpt_response_async(
+                prompt=prompt,
+                model=config.SUMMARY_LLM_MODEL_NAME,
+                temperature=0.5,  # Adjust temperature for summarization
+                max_tokens=256,  # Adjust max_tokens for summary length
+            )
+            # Update the template of the new `ContextWindow`
+            self.generate_template(summary.strip())
+            return summary.strip()
+
+        except Exception as e:
+            logger.error(f"Error generating window summary: {e}")
+            return ""  # Return an empty string on error
+
     def generate_template(self, summary: str) -> str:
         """Generates a template for the next window, including a summary."""
         self.template = f"Summary of recent conversation:\n{summary}\n\n"
@@ -41,8 +83,13 @@ class ContextWindow:
             )
 
         return self.template
+    
+    def is_full(self):
+        """Checks if the context window is full."""
+        return self.current_token_count >= self.available_tokens
 
     def reset_window(self):
         """Resets the context window."""
         self.current_token_count = 0
         self.template = ""
+        self.window_id = str(uuid.uuid4())

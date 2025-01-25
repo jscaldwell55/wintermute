@@ -4,6 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from openai import OpenAI, OpenAIError
 from typing import Optional
+import config
+from core.utils.task_queue import task_queue
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)
 
@@ -13,14 +16,14 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = config.LLM_API_KEY
         if not api_key:
             logger.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
             raise ValueError("OpenAI API key not configured.")
         _client = OpenAI(api_key=api_key)
     return _client
 
-def generate_gpt_response(prompt: str, model: str = "gpt-3.5-turbo", temperature: float = 0.7, max_tokens: int = 500) -> str:
+def generate_gpt_response(prompt: str, model: str = config.LLM_MODEL_NAME, temperature: float = 0.7, max_tokens: int = 500) -> str:
     """
     Generates a GPT response using the OpenAI ChatCompletion API.
 
@@ -61,7 +64,7 @@ def generate_gpt_response(prompt: str, model: str = "gpt-3.5-turbo", temperature
         logger.error(f"Unexpected error generating GPT response: {e}")
         raise
 
-async def generate_gpt_response_async(prompt: str, model: str = "gpt-3.5-turbo", temperature: float = 0.7, max_tokens: int = 500) -> str:
+async def generate_gpt_response_async(prompt: str, model: str = config.LLM_MODEL_NAME, temperature: float = 0.7, max_tokens: int = 500) -> str:
     """
     Asynchronous wrapper for the generate_gpt_response function.
 

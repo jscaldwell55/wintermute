@@ -1,7 +1,6 @@
 import logging
 import uuid
 from typing import List
-from gpt3_tokenizer import Tokenizer
 
 import api.utils.config as config
 from api.utils.task_queue import task_queue

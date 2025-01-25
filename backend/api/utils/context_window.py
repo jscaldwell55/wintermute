@@ -21,8 +21,6 @@ class SimpleTokenizer:
         return len(text.encode('utf-8')) // 4
 
 class ContextWindow:
-    """Manages the context window for the active conversation."""
-
     def __init__(self, max_tokens: int = 4096):
         """Initialize the context window with a maximum token limit."""
         self.max_tokens = max_tokens

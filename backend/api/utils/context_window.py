@@ -10,6 +10,16 @@ from api.core.memory.models import Memory  # Import Memory
 
 logger = logging.getLogger(__name__)
 
+class SimpleTokenizer:
+    @staticmethod
+    def count_tokens(text: str) -> int:
+        """
+        A simple tokenizer that approximates GPT tokens.
+        - Roughly 4 characters per token for English text
+        - Handles spaces and punctuation
+        """
+        return len(text.encode('utf-8')) // 4
+
 class ContextWindow:
     """Manages the context window for the active conversation."""
 
@@ -18,11 +28,11 @@ class ContextWindow:
         self.max_tokens = max_tokens
         self.current_token_count = 0
         self.available_tokens = max_tokens
-        self.tokenizer = Tokenizer()
+        self.tokenizer = SimpleTokenizer()
 
     def get_token_count(self, text: str) -> int:
         """Returns the number of tokens in the given text."""
-        return len(self.tokenizer.encode(text))
+        return self.tokenizer.count_tokens(text)
 
     def add_q_r_pair(self, query: str, response: str) -> bool:
         """Adds a Q/R pair to the context window, checking token count."""

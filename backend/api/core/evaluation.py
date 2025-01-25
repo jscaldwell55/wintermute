@@ -1,5 +1,5 @@
 import numpy as np
-from core.memory.models import Memory, MemoryType
+from .memory.models import Memory, MemoryType
 from api.core.vector_operations import VectorOperations
 from typing import Dict, List
 import logging

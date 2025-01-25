@@ -1,7 +1,7 @@
 import tiktoken
 import logging
 import uuid
-import backend.config as config
+import project_root.backend.api.utils.config as config
 from backend.utils.task_queue import task_queue
 import backend.utils.llm_service as llm_service
 

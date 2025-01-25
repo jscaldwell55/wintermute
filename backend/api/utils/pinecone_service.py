@@ -4,7 +4,7 @@ import logging
 from pinecone import Pinecone, ServerlessSpec
 import numpy as np
 from typing import Dict, Any, List, Optional, Tuple
-import config
+import project_root.backend.api.utils.config as config
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)

@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 from openai import OpenAI, OpenAIError
 from typing import Optional
-import config
+import project_root.backend.api.utils.config as config
 from backend.utils.task_queue import task_queue
 from tenacity import retry, stop_after_attempt, wait_fixed
 

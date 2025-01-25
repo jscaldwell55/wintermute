@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import List
-from gpt3_tokenizer import GPT3Tokenizer
+from gpt3_tokenizer import Tokenizer
 
 import api.utils.config as config
 from api.utils.task_queue import task_queue
@@ -18,7 +18,7 @@ class ContextWindow:
         self.max_tokens = max_tokens
         self.current_token_count = 0
         self.available_tokens = max_tokens
-        self.tokenizer = GPT3Tokenizer()
+        self.tokenizer = Tokenizer()
 
     def get_token_count(self, text: str) -> int:
         """Returns the number of tokens in the given text."""

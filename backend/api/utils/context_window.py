@@ -1,7 +1,7 @@
 import logging
 import uuid
 from typing import List
-from transformers import GPT2Tokenizer
+from gpt3_tokenizer import GPT3Tokenizer
 
 import api.utils.config as config
 from api.utils.task_queue import task_queue
@@ -13,63 +13,27 @@ logger = logging.getLogger(__name__)
 class ContextWindow:
     """Manages the context window for the active conversation."""
 
-    def __init__(
-        self,
-        window_id: str = None,
-        max_tokens: int = 4096,
-        reserved_tokens: int = 500,
-        template: str = "",
-        summary: str = "",
-        interactions: List[Tuple[str, str]] = None,
-        memories: List[Memory] = None,
-    ):
-        """
-        Initializes the context window.
-
-        Args:
-            window_id: A unique identifier for this window.
-            max_tokens: The maximum number of tokens allowed in the window.
-            reserved_tokens: The number of tokens reserved for the template and other fixed content.
-            template: The initial template for this window.
-            summary: A summary of the conversation so far.
-            interactions: A list of tuples, each containing a query and its response.
-            memories: A list of Memory objects associated with this window.
-        """
-        self.window_id = window_id or str(uuid.uuid4())
+    def __init__(self, max_tokens: int = 4096):
+        """Initialize the context window with a maximum token limit."""
         self.max_tokens = max_tokens
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-        self.reserved_tokens = reserved_tokens
-        self.available_tokens = max_tokens - reserved_tokens
         self.current_token_count = 0
-        self.template = template
-        self.summary = summary
-        self.interactions = interactions if interactions is not None else []
-        self.memories = memories if memories is not None else []
+        self.available_tokens = max_tokens
+        self.tokenizer = GPT3Tokenizer()
 
     def get_token_count(self, text: str) -> int:
         """Returns the number of tokens in the given text."""
         return len(self.tokenizer.encode(text))
 
     def add_q_r_pair(self, query: str, response: str) -> bool:
-        """
-        Adds a Q/R pair to the context window, checking token count.
-
-        Args:
-            query: The user's query.
-            response: The system's response.
-
-        Returns:
-            True if the Q/R pair was added successfully, False otherwise.
-        """
+        """Adds a Q/R pair to the context window, checking token count."""
         q_r_text = f"Q: {query}\nA: {response}"
         q_r_tokens = self.get_token_count(q_r_text)
 
-        logger.debug(f"Adding Q/R pair: {q_r_tokens} tokens")
-        logger.debug(f"Current token count: {self.current_token_count}")
-        logger.debug(f"Available tokens: {self.available_tokens}")
+        print(f"DEBUG: Adding Q/R pair: {q_r_tokens} tokens")
+        print(f"DEBUG: Current token count: {self.current_token_count}")
+        print(f"DEBUG: Available tokens: {self.available_tokens}")
 
         if self.current_token_count + q_r_tokens <= self.available_tokens:
-            self.interactions.append((query, response))
             self.current_token_count += q_r_tokens
             return True
         else:

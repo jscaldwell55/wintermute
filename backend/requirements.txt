@@ -18,4 +18,4 @@ openai>=1.12.0
 fastapi
 uvicorn
 tenacity==8.2.3
-transformers
+gpt3-tokenizer

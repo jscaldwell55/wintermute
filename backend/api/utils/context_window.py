@@ -10,18 +10,18 @@ logger = logging.getLogger(__name__)
 class ContextWindow:
     """Manages the context window for the active conversation."""
 
-    def __init__(self, total_tokens: int = config.MAX_TOKENS_PER_CONTEXT_WINDOW, reserved_tokens: int = 512):
-        self.total_tokens = total_tokens
-        self.reserved_tokens = reserved_tokens
-        self.available_tokens = self.total_tokens - self.reserved_tokens
+   def __init__(self, max_tokens: int = 4096):
+        """Initialize the context window with a maximum token limit."""
+        self.max_tokens = max_tokens
         self.current_token_count = 0
-        self.encoding = tiktoken.encoding_for_model(config.LLM_MODEL_NAME)
-        self.template = ""
-        self.window_id = str(uuid.uuid4())
+        self.available_tokens = max_tokens
+        # Instead of tiktoken, initialize GPT2Tokenizer
+        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
     def get_token_count(self, text: str) -> int:
         """Returns the number of tokens in the given text."""
-        return len(self.encoding.encode(text))
+        # Replace tiktoken encoding with GPT2Tokenizer encoding
+        return len(self.tokenizer.encode(text))
 
     def add_q_r_pair(self, query: str, response: str) -> bool:
         """Adds a Q/R pair to the context window, checking token count."""
@@ -35,8 +35,6 @@ class ContextWindow:
         if self.current_token_count + q_r_tokens <= self.available_tokens:
             self.current_token_count += q_r_tokens
             return True
-        else:
-            return False
 
     async def generate_window_summary(self, memories: list, window_id: str) -> str:
         """

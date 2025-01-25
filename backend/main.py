@@ -15,15 +15,18 @@ from api.utils.context_window import ContextWindow
 from api.utils.dream_sequence import DreamSequence
 from api.utils.pinecone_service import PineconeService
 from api.core.evaluation import MemoryEvaluation
+from api.core.models.vector import VectorModel # Add missing import
+from api.core.models.vector import MockVectorOperations # Add missing import
 import api.utils.llm_service as llm_service
 from api.utils.task_queue import task_queue
-from api.utils.config import settings
+from api.utils.config import settings  # Import settings first
 
 # Prompt templates
 from api.utils.prompt_templates import (
     MASTER_TEMPLATE,
     format_prompt,
 )
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO if settings.is_production else logging.DEBUG)

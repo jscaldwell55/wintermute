@@ -16,14 +16,14 @@ _client = None
 def _get_client():
     global _client
     if _client is None:
-        api_key = config.LLM_API_KEY
+        api_key = settings.LLM_API_KEY  # Access settings directly
         if not api_key:
             logger.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
             raise ValueError("OpenAI API key not configured.")
         _client = OpenAI(api_key=api_key)
     return _client
 
-def generate_gpt_response(prompt: str, model: str = config.LLM_MODEL_NAME, temperature: float = 0.7, max_tokens: int = 500) -> str:
+def generate_gpt_response(prompt: str, model: str = None, temperature: float = 0.7, max_tokens: int = 500) -> str:
     """
     Generates a GPT response using the OpenAI ChatCompletion API.
 
@@ -39,6 +39,10 @@ def generate_gpt_response(prompt: str, model: str = config.LLM_MODEL_NAME, tempe
     if not prompt.strip():
         logger.error("Prompt cannot be empty.")
         raise ValueError("Prompt cannot be empty.")
+
+    # Assign default model if not provided
+    if model is None:
+        model = settings.LLM_MODEL_ID
 
     try:
         client = _get_client()
@@ -64,7 +68,7 @@ def generate_gpt_response(prompt: str, model: str = config.LLM_MODEL_NAME, tempe
         logger.error(f"Unexpected error generating GPT response: {e}")
         raise
 
-async def generate_gpt_response_async(prompt: str, model: str = config.LLM_MODEL_NAME, temperature: float = 0.7, max_tokens: int = 500) -> str:
+async def generate_gpt_response_async(prompt: str, model: str = None, temperature: float = 0.7, max_tokens: int = 500) -> str:
     """
     Asynchronous wrapper for the generate_gpt_response function.
 
@@ -79,6 +83,10 @@ async def generate_gpt_response_async(prompt: str, model: str = config.LLM_MODEL
     """
     logger.info("Starting async GPT response generation...")
     loop = asyncio.get_event_loop()
+
+    # Assign default model if not provided
+    if model is None:
+        model = settings.LLM_MODEL_ID
 
     try:
         with ThreadPoolExecutor() as executor:

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 # Core components - Imports assuming the structure in the image
 from api.core.memory.memory import MemorySystem, MemoryType
-from api.core.vector_operations import MockVectorOperations, VectorOperations
+from api.core.vector_operations import VectorOperations
 from api.utils.context_window import ContextWindow
 from api.utils.dream_sequence import DreamSequence
 from api.utils.pinecone_service import PineconeService

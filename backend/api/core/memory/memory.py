@@ -4,10 +4,10 @@ Core memory system implementing the direct-to-Pinecone approach.
 
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
-from backend.core.memory.models import Memory, MemoryType
-from backend.utils.vector_operations import VectorOperations
-from backend.utils.pinecone_service import PineconeService
-from backend.core.prompts.prompt_templates import (
+from api.core.memory.models import Memory, MemoryType
+from api.utils.vector_operations import VectorOperations
+from api.utils.pinecone_service import PineconeService
+from api.utils.prompt_templates import (
     MASTER_TEMPLATE,
     format_prompt,
 )

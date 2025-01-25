@@ -3,7 +3,7 @@ from typing import Dict, Any, List, Optional
 from scipy.spatial.distance import cosine, euclidean
 import logging
 import asyncio
-from core.memory.models import Memory, MemoryType
+from .memory.models import Memory, MemoryType
 import os
 from openai import OpenAI
 import project_root.backend.api.utils.config as config

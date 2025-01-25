@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from api.core.memory.models import Memory, MemoryType
 from api.core.evaluation import MemoryEvaluation
-from api.utils.vector_operations import VectorOperations
+from project_root.backend.api.core.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os

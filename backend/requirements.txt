@@ -21,4 +21,4 @@ uvicorn
 tenacity==8.2.3
 torch
 transformers
-scikit-learn==1.3.0
+scikit-learn

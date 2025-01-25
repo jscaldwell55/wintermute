@@ -18,3 +18,4 @@ openai>=1.12.0
 fastapi
 uvicorn
 tenacity==8.2.3
+tiktoken==0.5.1 

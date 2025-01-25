@@ -10,7 +10,7 @@ from api.core.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os
-import api.utils.config as config
+from api.utils.config import settings
 from api.utils.task_queue import task_queue
 import api.utils.llm_service as llm_service
 from transformers import pipeline

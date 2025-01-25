@@ -7,17 +7,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-# Core components - Now relative to 'api'
-from api.core.memory.memory import MemorySystem, MemoryType
-# from api.core.vector.vector_model import VectorModel # Removed incorrect import
-from api.utils.vector.vector_operations import MockVectorOperations, VectorOperations
-from api.utils.context.context_window import ContextWindow
-from api.utils.dream_sequence import DreamSequence
-from api.utils.pinecone_service import PineconeService
-from api.core.evaluation.evaluator import MemoryEvaluation
-import api.utils.llm_service as llm_service
-from api.utils.task_queue import task_queue
-from api.utils.config import (
+# Core components - Imports assuming the structure in the image
+from backend.core.memory.memory import MemorySystem, MemoryType
+from backend.utils.vector_operations import MockVectorOperations, VectorOperations
+from backend.utils.context_window import ContextWindow
+from backend.utils.dream_sequence import DreamSequence
+from backend.utils.pinecone_service import PineconeService
+from backend.core.evaluation import MemoryEvaluation  # Assuming you move evaluation.py to a directory core/evaluation
+import backend.utils.llm_service as llm_service
+from backend.utils.task_queue import task_queue
+from backend.utils.config import (
     PINECONE_API_KEY,
     PINECONE_ENVIRONMENT,
     INDEX_NAME,
@@ -32,7 +31,7 @@ from api.utils.config import (
 )
 
 # Prompt templates
-from api.utils.prompt_templates import (
+from backend.utils.prompt_templates import (
     MASTER_TEMPLATE,
     format_prompt,
 )

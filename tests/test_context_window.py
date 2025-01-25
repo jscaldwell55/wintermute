@@ -4,7 +4,7 @@ from backend.utils.context_window import ContextWindow
 from backend.utils.llm_service import generate_gpt_response_async
 from unittest.mock import patch
 import asyncio
-import backend.config as config
+import project_root.backend.api.utils.config as config
 
 # Mock the generate_gpt_response_async to return a predefined summary
 @pytest.fixture

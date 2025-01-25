@@ -11,17 +11,20 @@ from datetime import timedelta
 from pydantic import BaseModel
 
 # Core components
-from core.memory.memory import MemorySystem, MemoryType
-from core.memory.models import Memory
-from utils.vector_operations import VectorOperations
-from utils.pinecone_service import PineconeService
-from core.evaluation import MemoryEvaluation
-from utils.dream_sequence import DreamSequence
-from utils.context_window import ContextWindow
-import utils.llm_service as llm_service
-from core.prompts.prompt_templates import MASTER_TEMPLATE, format_prompt
-from core.utils.task_queue import task_queue # Import task_queue
-import config
+from backend.core.memory.memory import MemorySystem, MemoryType
+from backend.core.memory.models import Memory
+from backend.utils.vector_operations import VectorOperations
+from backend.utils.pinecone_service import PineconeService
+from backend.core.evaluation import MemoryEvaluation
+from backend.utils.dream_sequence import DreamSequence
+from backend.utils.context_window import ContextWindow
+import backend.utils.llm_service as llm_service
+from backend.utils.task_queue import task_queue
+import backend.config as config
+from backend.core.prompts.prompt_templates import (
+    MASTER_TEMPLATE,
+    format_prompt,
+)
 
 # Load environment variables
 load_dotenv()

@@ -4,10 +4,10 @@ Core memory system implementing the direct-to-Pinecone approach.
 
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
-from core.memory.models import Memory, MemoryType
-from utils.vector_operations import VectorOperations
-from utils.pinecone_service import PineconeService
-from core.prompts.prompt_templates import (
+from backend.core.memory.models import Memory, MemoryType
+from backend.utils.vector_operations import VectorOperations
+from backend.utils.pinecone_service import PineconeService
+from backend.core.prompts.prompt_templates import (
     MASTER_TEMPLATE,
     format_prompt,
 )
@@ -16,15 +16,17 @@ import numpy as np
 import uuid
 import asyncio
 import math
-import config # Import config.py
-from core.utils.task_queue import task_queue
+import backend.config as config
+from backend.utils.task_queue import task_queue
 
 logger = logging.getLogger(__name__)
 
 class MemorySystem:
     """Core memory system using Pinecone for storage."""
 
-    def __init__(self, pinecone_service: PineconeService, vector_operations: VectorOperations):
+    def __init__(
+        self, pinecone_service: PineconeService, vector_operations: VectorOperations
+    ):
         self.pinecone_service = pinecone_service
         self.vector_operations = vector_operations
         self.retention_window = timedelta(days=7)
@@ -95,7 +97,9 @@ class MemorySystem:
             )
 
             # Log and upsert
-            logger.info(f"Upserting memory with ID: {memory_id} and metadata: {full_metadata}")
+            logger.info(
+                f"Upserting memory with ID: {memory_id} and metadata: {full_metadata}"
+            )
 
             # Upsert to Pinecone
             await self.pinecone_service.upsert_memory(
@@ -110,7 +114,9 @@ class MemorySystem:
             logger.error(f"Error adding memory: {e}")
             raise RuntimeError(f"Error adding memory: {e}")
 
-    async def add_interaction_memory(self, user_query: str, gpt_response: str, window_id: Optional[str] = None):
+    async def add_interaction_memory(
+        self, user_query: str, gpt_response: str, window_id: Optional[str] = None
+    ):
         """
         Stores a user query and its corresponding GPT response as an interaction memory (episodic).
 
@@ -133,15 +139,12 @@ class MemorySystem:
                 self.add_memory,
                 content=f"Q: {user_query}\nA: {gpt_response}",
                 memory_type=MemoryType.EPISODIC,
-                metadata={
-                    "interaction": True,
-                    "window_id": window_id
-                },
+                metadata={"interaction": True, "window_id": window_id},
                 semantic_vector=combined_vector,
                 window_id=window_id,
                 task_id=task_id,  # Pass the unique task ID
                 retries=config.SUMMARY_RETRIES,
-                retry_delay=config.SUMMARY_RETRY_DELAY
+                retry_delay=config.SUMMARY_RETRY_DELAY,
             )
 
             logger.info(
@@ -181,12 +184,12 @@ class MemorySystem:
                 query_types=query_types, window_id=window_id
             )
             response = await self.pinecone_service.query_memory(
-                query_vector=query_vector,
-                top_k=top_k,
-                filters=filters
+                query_vector=query_vector, top_k=top_k, filters=filters
             )
 
-            results = response.get("matches", []) if isinstance(response, dict) else response
+            results = (
+                response.get("matches", []) if isinstance(response, dict) else response
+            )
 
             memories_with_scores = [
                 (self._create_memory_from_result(result), result["score"])
@@ -201,7 +204,7 @@ class MemorySystem:
         except Exception as e:
             logger.error(f"Error querying memory: {e}")
             raise
-    
+
     async def batch_embed_and_store(self, memories: List[Dict[str, Any]]):
         """
         Batch embeds and stores memories in Pinecone.
@@ -227,7 +230,7 @@ class MemorySystem:
             upsert_data = [
                 {
                     "id": memory_id,
-                    "values": vector.tolist(),
+                    "values": vector,  # Updated to remove .tolist()
                     "metadata": metadata,
                 }
                 for memory_id, vector, metadata in zip(
@@ -242,9 +245,7 @@ class MemorySystem:
 
         except Exception as e:
             logger.error(f"Error in batch embedding and storing memories: {e}")
-            raise RuntimeError(
-                f"Error in batch embedding and storing memories: {e}"
-            )
+            raise RuntimeError(f"Error in batch embedding and storing memories: {e}")
 
     async def generate_prompt(
         self, query: str, template_type: str, metadata: Optional[Dict[str, Any]] = None
@@ -264,10 +265,10 @@ class MemorySystem:
 
         # Query both episodic and semantic memories
         episodic_memories = await self.query_memory(
-            query_vector=query_vector, query_types=[MemoryType.EPISODIC], k=5
+            query_vector=query_vector, query_types=[MemoryType.EPISODIC], top_k=5
         )
         semantic_memories = await self.query_memory(
-            query_vector=query_vector, query_types=[MemoryType.SEMANTIC], k=5
+            query_vector=query_vector, query_types=[MemoryType.SEMANTIC], top_k=5
         )
 
         # Combine and rank the memories

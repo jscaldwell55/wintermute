@@ -1,26 +1,35 @@
 import logging
+import uuid
+from sklearn.metrics import silhouette_score
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Dict
-from core.memory.models import Memory, MemoryType
-from core.evaluation import MemoryEvaluation
-from utils.vector_operations import VectorOperations
+from typing import List, Dict, Optional
+from backend.core.memory.models import Memory, MemoryType
+from backend.core.evaluation import MemoryEvaluation
+from backend.utils.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os
-import config
-from core.utils.task_queue import task_queue
-import utils.llm_service as llm_service
+import backend.config as config
+from backend.utils.task_queue import task_queue
+import backend.utils.llm_service as llm_service
+from transformers import pipeline
 
 logger = logging.getLogger(__name__)
 
 class DreamSequence:
-    def __init__(self, memory_system, vector_operations: VectorOperations, evaluation_module: MemoryEvaluation):
+    def __init__(
+        self,
+        memory_system,
+        vector_operations: VectorOperations,
+        evaluation_module: MemoryEvaluation,
+    ):
         self.memory_system = memory_system
         self.vector_operations = vector_operations
         self.evaluation_module = evaluation_module
         self.last_dream_time_file = "last_dream_time.txt"
-
+        self.summarization_pipeline = pipeline("summarization", model="facebook/bart-large-cnn") # facebook/bart-large-cnn is a good default for summarization tasks
+    
     def run_dream_sequence_task(self):
         """
         Wraps run_dream_sequence for task queue execution with retries.
@@ -50,15 +59,19 @@ class DreamSequence:
                 significance = await self._evaluate_pattern_significance(pattern)
                 if significance > config.SIGNIFICANCE_THRESHOLD:
                     semantic_memory = await self._create_semantic_memory(pattern)
-                    quality_metrics = await self.evaluation_module.evaluate_semantic_memory(
-                        semantic_memory, pattern["cluster_memories"]
+                    quality_metrics = (
+                        await self.evaluation_module.evaluate_semantic_memory(
+                            semantic_memory, pattern["cluster_memories"]
+                        )
                     )
                     semantic_memory.quality_metrics = quality_metrics
 
                     # Check against thresholds defined in config.py
                     if (
-                        quality_metrics["relevance"] > config.SEMANTIC_MEMORY_RELEVANCE_THRESHOLD
-                        and quality_metrics["coherence"] > config.SEMANTIC_MEMORY_COHERENCE_THRESHOLD
+                        quality_metrics["relevance"]
+                        > config.SEMANTIC_MEMORY_RELEVANCE_THRESHOLD
+                        and quality_metrics["coherence"]
+                        > config.SEMANTIC_MEMORY_COHERENCE_THRESHOLD
                     ):
                         new_semantic_memories.append(semantic_memory)
 
@@ -69,8 +82,12 @@ class DreamSequence:
                     memory_type=MemoryType.SEMANTIC,
                     metadata={
                         "quality_metrics": semantic_memory.quality_metrics,
-                        "source_episodic_memories": semantic_memory.metadata["source_episodic_memories"],
-                        "source_pattern": semantic_memory.metadata.get("source_pattern", ""),  # Ensure this key exists
+                        "source_episodic_memories": semantic_memory.metadata[
+                            "source_episodic_memories"
+                        ],
+                        "source_pattern": semantic_memory.metadata.get(
+                            "source_pattern", ""
+                        ),  # Ensure this key exists
                     },
                 )
 
@@ -90,7 +107,9 @@ class DreamSequence:
         last_dream_time = self._get_last_dream_time()
         recent_episodic_memories = []
         try:
-            all_memories = await self.memory_system.pinecone_service.get_all_memories_with_metadata()
+            all_memories = (
+                await self.memory_system.pinecone_service.get_all_memories_with_metadata()
+            )
             for mem in all_memories:
                 created_at_str = mem["metadata"].get("created_at")
                 if created_at_str:
@@ -124,123 +143,187 @@ class DreamSequence:
     async def _identify_semantic_patterns(self, memories: List[Memory]) -> List[Dict]:
         """Identifies potential semantic patterns using clustering (frequency-based approach)."""
         if not memories:
+            logger.info("No memories provided for pattern identification")
             return []
 
-        # 1. Get semantic vectors
-        vectors = [np.array(mem.semantic_vector) for mem in memories if mem.semantic_vector is not None]
+        # 1. Get and validate semantic vectors
+        vectors = []
+        for mem in memories:
+            if mem.semantic_vector is None:
+                logger.warning(f"Memory {mem.id} has no semantic vector, skipping")
+                continue
+            
+            try:
+                vector = np.array(mem.semantic_vector)
+                if np.any(np.isnan(vector)) or np.any(np.isinf(vector)):
+                    logger.warning(f"Memory {mem.id} has invalid vector values, skipping")
+                    continue
+                vectors.append(vector)
+            except Exception as e:
+                logger.error(f"Error processing vector for memory {mem.id}: {e}")
+                continue
+
         if not vectors:
+            logger.warning("No valid vectors available for clustering")
             return []
+
+        logger.info(f"Processing {len(vectors)} valid vectors for clustering")
 
         # 2. Cluster the vectors
         try:
             best_score = -1
             best_clusters = None
-            for n_clusters in range(config.KMEANS_N_CLUSTERS_MIN, config.KMEANS_N_CLUSTERS_MAX):
+            best_n_clusters = None
+            vectors_array = np.vstack(vectors)  # Convert list to numpy array
+
+            # Ensure the number of clusters does not exceed the number of memories
+            max_clusters = min(config.KMEANS_N_CLUSTERS_MAX, len(vectors))
+
+            # Initialize default clustering in case no better solution is found
+            kmeans_default = KMeans(
+                n_clusters=config.KMEANS_N_CLUSTERS_MIN,  # Start with minimum of 2 clusters
+                init=config.KMEANS_INIT,
+                max_iter=config.KMEANS_MAX_ITER,
+                n_init=config.KMEANS_N_INIT,
+                random_state=0,
+            )
+            best_clusters = kmeans_default.fit_predict(vectors_array)
+
+            # Try different numbers of clusters
+            for n_clusters in range(config.KMEANS_N_CLUSTERS_MIN, max_clusters + 1):
+                if len(vectors) < n_clusters:
+                    logger.warning(f"Skipping clustering with {n_clusters} clusters due to insufficient samples.")
+                    continue
+
+                logger.debug(f"Attempting clustering with {n_clusters} clusters")
+                
                 kmeans = KMeans(
                     n_clusters=n_clusters,
                     init=config.KMEANS_INIT,
                     max_iter=config.KMEANS_MAX_ITER,
                     n_init=config.KMEANS_N_INIT,
-                    random_state=0
+                    random_state=0,
                 )
-                labels = kmeans.fit_predict(vectors)
-                score = silhouette_score(vectors, labels)
+                labels = kmeans.fit_predict(vectors_array)
                 
-                if score > best_score:
-                    best_score = score
+                # Calculate silhouette score for more than one cluster and less than the number of samples
+                if 1 < n_clusters < len(vectors):
+                    score = silhouette_score(vectors_array, labels)
+                    logger.debug(f"Silhouette score for {n_clusters} clusters: {score}")
+
+                    if score > best_score:
+                        best_score = score
+                        best_clusters = labels
+                        best_n_clusters = n_clusters
+                        logger.info(f"New best clustering found: {n_clusters} clusters with score {score}")
+                else:
                     best_clusters = labels
+
+            if best_clusters is None:
+                logger.warning("No valid clustering found, using default clustering")
+                best_clusters = kmeans_default.fit_predict(vectors_array)
+
+            # 3. Identify frequent clusters with detailed logging
+            cluster_counts = {}
+            for label in best_clusters:
+                cluster_counts[label] = cluster_counts.get(label, 0) + 1
+            
+            logger.debug(f"Cluster distribution: {cluster_counts}")
+            
+            # Define minimum cluster size based on total memories
+            min_cluster_size = max(3, int(len(memories) * 0.1))  # At least 3 or 10% of total
+            frequent_clusters = [
+                label for label, count in cluster_counts.items() 
+                if count >= min_cluster_size
+            ]
+            
+            logger.info(f"Found {len(frequent_clusters)} frequent clusters with minimum size {min_cluster_size}")
+
+            # 4. Prepare patterns with validation
+            patterns = []
+            for cluster_label in frequent_clusters:
+                cluster_indices = [
+                    i for i, label in enumerate(best_clusters) if label == cluster_label
+                ]
+                
+                if not cluster_indices:
+                    logger.warning(f"No memories found for cluster {cluster_label}, skipping")
+                    continue
+                    
+                cluster_memories = [memories[i] for i in cluster_indices]
+                
+                # Validate cluster memories
+                if len(cluster_memories) >= min_cluster_size:
+                    patterns.append({
+                        "cluster_memories": cluster_memories,
+                        "cluster_size": len(cluster_memories),
+                        "cluster_label": cluster_label
+                    })
+                    logger.debug(f"Added pattern for cluster {cluster_label} with {len(cluster_memories)} memories")
+
+            logger.info(f"Final number of patterns identified: {len(patterns)}")
+            return patterns
+
         except Exception as e:
-            logger.error(f"Error during clustering: {e}")
+            logger.error(f"Error during pattern identification: {str(e)}", exc_info=True)
             return []
 
-        # 3. Identify frequent clusters
-        cluster_counts = {}
-        for label in best_clusters:
-            cluster_counts[label] = cluster_counts.get(label, 0) + 1
-
-        frequent_clusters = [
-            label for label, count in cluster_counts.items() if count >= 3
-        ]  # Example: At least 3 memories in a cluster
-
-        # 4. Prepare patterns
-        patterns = []
-        for cluster_label in frequent_clusters:
-            cluster_indices = [i for i, label in enumerate(best_clusters) if label == cluster_label]
-            cluster_memories = [memories[i] for i in cluster_indices]
-            patterns.append({"cluster_memories": cluster_memories})
-
-        return patterns
-
     async def _create_semantic_memory(self, pattern: Dict) -> Memory:
-      """Creates a semantic memory from a pattern (cluster of episodic memories)."""
-      cluster_memories = pattern["cluster_memories"]
+        """Creates a semantic memory from a pattern (cluster of episodic memories)."""
+        cluster_memories = pattern["cluster_memories"]
 
-      # 1. Generate content (using LLM for summarization)
-      content = await self._generate_semantic_content(cluster_memories)
+        # 1. Generate content (using LLM for summarization)
+        content = await self._generate_semantic_content(cluster_memories)
 
-      # 2. Generate semantic vector
-      semantic_vector = await self.vector_operations.create_semantic_vector(content)
+        # 2. Generate semantic vector
+        semantic_vector = await self.vector_operations.create_semantic_vector(content)
 
-      # 3. Create memory object
-      memory_id = f"sem_{uuid.uuid4()}"
-      full_metadata = {
-          "content": content,
-          "created_at": datetime.now().isoformat(),
-          "memory_type": MemoryType.SEMANTIC.value,
-          "source_episodic_memories": [mem.id for mem in cluster_memories],  # Link to source memories
-      }
+        # 3. Create memory object
+        memory_id = f"sem_{uuid.uuid4()}"
+        full_metadata = {
+            "content": content,
+            "created_at": datetime.now().isoformat(),
+            "memory_type": MemoryType.SEMANTIC.value,
+            "source_episodic_memories": [mem.id for mem in cluster_memories],  # Link to source memories
+        }
 
-      memory = Memory(
-          id=memory_id,
-          memory_type=MemoryType.SEMANTIC,
-          content=content,
-          semantic_vector=semantic_vector,
-          metadata=full_metadata,
-          created_at=datetime.now().isoformat(),
-      )
+        memory = Memory(
+            id=memory_id,
+            memory_type=MemoryType.SEMANTIC,
+            content=content,
+            semantic_vector=semantic_vector,
+            metadata=full_metadata,
+            created_at=datetime.now().isoformat(),
+        )
 
-      return memory
+        return memory
 
     async def _generate_semantic_content(self, memories: List[Memory]) -> str:
-        """Generates a concise description of the semantic content using an LLM."""
+        """Generates a concise description of the semantic content using a summarization model."""
         if not memories:
             return ""
 
-        # Build a prompt for the LLM
+        # Build a prompt for the summarization model
         memory_contents = [mem.content for mem in memories]
-        prompt = f"""
-        Identify the common theme or knowledge from these memories:
+        text = " ".join(memory_contents)
 
-        {' '.join(memory_contents)}
-
-        Summary:
-        """
-
-        # Use the LLM to generate the content
         try:
-            response = await llm_service.generate_gpt_response_async(
-                prompt=prompt,
-                model=config.SUMMARY_LLM_MODEL_NAME,
-                temperature=0.2,
-                max_tokens=100,
-            )
-            return response.strip()
+            # Use the summarization pipeline
+            summary = self.summarization_pipeline(text, max_length=130, min_length=30, do_sample=False)
+            return summary[0]['summary_text'].strip()
         except Exception as e:
-            logger.error(f"Error generating semantic content with LLM: {e}")
+            logger.error(f"Error generating semantic content with summarization model: {e}")
             # Fallback: Use a simple concatenation of memory content
             return " ".join([mem.content for mem in memories])
 
     async def _evaluate_pattern_significance(self, pattern: Dict) -> float:
-      """Evaluates the significance of a pattern before creating a semantic memory."""
-      # Placeholder for now, you can replace this with more complex logic later.
-      # For example, you can check the frequency of the pattern,
-      # the diversity of the memories in the pattern, etc.
-      return 1.0  # Every pattern is considered significant for now
+        """Evaluates the significance of a pattern before creating a semantic memory."""
+        # Placeholder for now, you can replace this with more complex logic later.
+        # For example, you can check the frequency of the pattern,
+        # the diversity of the memories in the pattern, etc.
+        return 1.0  # Every pattern is considered significant for now
 
     async def consolidate_memories(self):
-        """
-        Consolidates old episodic memories into semantic memories and removes outdated episodic memories.
-        """
         logger.info("Starting memory consolidation...")
         try:
             # Define the age threshold for old episodic memories (e.g., 7 days)
@@ -248,10 +331,10 @@ class DreamSequence:
 
             # Find episodic memories older than the age threshold
             old_episodic_memories = [
-                mem
-                for mem in await self.memory_system.get_all_memories()
-                if mem.memory_type == MemoryType.EPISODIC
-                and datetime.fromisoformat(mem.created_at) < age_threshold
+                self.memory_system._create_memory_from_result(mem)
+                for mem in await self.memory_system.pinecone_service.get_all_memories_with_metadata()
+                if mem.get("metadata", {}).get("memory_type") == MemoryType.EPISODIC.value
+                and datetime.fromisoformat(mem["metadata"]["created_at"]) < age_threshold
             ]
 
             if not old_episodic_memories:
@@ -273,5 +356,3 @@ class DreamSequence:
 
         except Exception as e:
             logger.error(f"Error during memory consolidation: {e}")
-
-# Constants (moved to config.py)

@@ -1,9 +1,9 @@
 import tiktoken
 import logging
 import uuid
-import config
-from core.utils.task_queue import task_queue
-import utils.llm_service as llm_service
+import backend.config as config
+from backend.utils.task_queue import task_queue
+import backend.utils.llm_service as llm_service
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,10 @@ class ContextWindow:
         """Adds a Q/R pair to the context window, checking token count."""
         q_r_text = f"Q: {query}\nA: {response}"
         q_r_tokens = self.get_token_count(q_r_text)
+
+        print(f"DEBUG: Adding Q/R pair: {q_r_tokens} tokens")
+        print(f"DEBUG: Current token count: {self.current_token_count}")
+        print(f"DEBUG: Available tokens: {self.available_tokens}")
 
         if self.current_token_count + q_r_tokens <= self.available_tokens:
             self.current_token_count += q_r_tokens
@@ -83,9 +87,10 @@ class ContextWindow:
             )
 
         return self.template
-    
+
     def is_full(self):
         """Checks if the context window is full."""
+        print(f"DEBUG: Checking if full. Current count: {self.current_token_count}, Available: {self.available_tokens}")
         return self.current_token_count >= self.available_tokens
 
     def reset_window(self):

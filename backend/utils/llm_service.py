@@ -5,7 +5,7 @@ import asyncio
 from openai import OpenAI, OpenAIError
 from typing import Optional
 import config
-from core.utils.task_queue import task_queue
+from backend.utils.task_queue import task_queue
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 logger = logging.getLogger(__name__)

@@ -27,3 +27,12 @@ Please provide a helpful and informative response to the user, drawing upon the 
 
 Response:
 """
+
+# backend/core/prompts/prompt_templates.py
+MASTER_TEMPLATE = """
+... (your template) ...
+"""
+
+def format_prompt(template, **kwargs):
+    """Formats the prompt template with the given keyword arguments."""
+    return template.format(**kwargs)

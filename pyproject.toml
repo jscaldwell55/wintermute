@@ -1,0 +1,25 @@
+[project]
+name = "wintermute"  # Replace with your project name
+version = "0.1.0"
+description = "Your project description"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-dotenv",
+    "pinecone-client",
+    "openai",
+    "scikit-learn",
+    "tiktoken",
+    "numpy",
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "tenacity",
+]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  ".",
+  "backend"
+]
+asyncio_mode = "auto"

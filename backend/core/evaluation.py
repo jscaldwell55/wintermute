@@ -4,6 +4,7 @@ from utils.vector_operations import VectorOperations
 from typing import Dict, List
 import logging
 import utils.llm_service as llm_service
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 

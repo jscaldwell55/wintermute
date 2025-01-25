@@ -2,16 +2,16 @@
 import os
 
 # --- LLM Service ---
-LLM_API_KEY = os.environ.get("LLM_API_KEY", "your_llm_api_key")  # Replace with your actual key
+LLM_API_KEY = os.environ.get("LLM_API_KEY")
 LLM_MODEL_NAME = "gpt-3.5-turbo"
 LLM_API_BASE_URL = "https://api.openai.com/v1" #For OpenAI models
 LLM_API_RATE_LIMIT_PER_MINUTE = 30
 SUMMARY_LLM_MODEL_NAME = "gpt-3.5-turbo"  # Can be the same or a different model
 
 # --- Pinecone Service ---
-PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "your_pinecone_api_key")
-PINECONE_ENVIRONMENT = "us-west1-gcp"  # Replace with your environment
-PINECONE_INDEX_NAME = "semantic-memory"
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY", "pcsk_hzCox_SLS1Yi92BDA7QNvqsKV1pbPZhuzP3rxCU9jcHuDkSCYnCbCuP3YQdsPUQs5ZYbp")
+PINECONE_ENVIRONMENT = "us-east-1"  # Replace with your environment
+PINECONE_INDEX_NAME = "wintermute"
 PINECONE_API_RATE_LIMIT_PER_SECOND = 3
 
 # --- Memory ---

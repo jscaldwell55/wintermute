@@ -1,6 +1,6 @@
 import numpy as np
 from .memory.models import Memory, MemoryType
-from api.core.vector_operations import VectorOperations
+from project_root.backend.api.core.vector.vector_operations import VectorOperations
 from typing import Dict, List
 import logging
 import api.utils.llm_service as llm_service

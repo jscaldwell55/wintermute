@@ -5,7 +5,7 @@ Core memory system implementing the direct-to-Pinecone approach.
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from api.core.memory.models import Memory, MemoryType
-from api.core.vector_operations import VectorOperations
+from api.core.vector.vector_operations import VectorOperations
 from api.utils.pinecone_service import PineconeService
 from api.utils.prompt_templates import (
     MASTER_TEMPLATE,
@@ -30,6 +30,7 @@ class MemorySystem:
         self.pinecone_service = pinecone_service
         self.vector_operations = vector_operations
         self.retention_window = timedelta(days=7)
+        self.last_dream_time = datetime.utcnow() - timedelta(days=1)  # Initialize with an old timestamp
 
     async def add_memory(
         self,
@@ -104,7 +105,7 @@ class MemorySystem:
             # Upsert to Pinecone
             await self.pinecone_service.upsert_memory(
                 memory_id=memory.id,
-                vector=memory.semantic_vector,
+                vector=semantic_vector,
                 metadata=memory.metadata,
             )
 
@@ -134,17 +135,37 @@ class MemorySystem:
             # Generate a unique task ID for the memory
             task_id = f"mem_{uuid.uuid4()}"
 
+            # Define a helper function to add memory
+            async def add_memory_task(content, memory_type, metadata, window_id, combined_vector):
+                print("add_memory_task called with:", content, memory_type, metadata, window_id, combined_vector)
+                task_id = f"mem_{uuid.uuid4()}"
+                memory = Memory(
+                    id=task_id,
+                    memory_type=memory_type,
+                    content=content,
+                    metadata=metadata,
+                    created_at=datetime.now().isoformat(),
+                    window_id=window_id,
+                    semantic_vector=combined_vector
+                )
+                await self.add_memory(
+                    content=content,
+                    memory_type=memory_type,
+                    metadata=metadata,
+                    window_id=window_id,
+                    task_id=task_id
+            )
+
             # Enqueue the memory addition task with retries
             task_queue.enqueue(
-                self.add_memory,
+                add_memory_task,
                 content=f"Q: {user_query}\nA: {gpt_response}",
                 memory_type=MemoryType.EPISODIC,
                 metadata={"interaction": True, "window_id": window_id},
-                semantic_vector=combined_vector,
                 window_id=window_id,
-                task_id=task_id,  # Pass the unique task ID
-                retries=config.SUMMARY_RETRIES,
-                retry_delay=config.SUMMARY_RETRY_DELAY,
+                combined_vector=combined_vector,
+                retries=settings.get_setting("SUMMARY_RETRIES"),
+                retry_delay=settings.get_setting("SUMMARY_RETRY_DELAY"),
             )
 
             logger.info(
@@ -158,52 +179,63 @@ class MemorySystem:
     async def query_memory(
         self,
         query_vector: List[float],
-        query_types: List[MemoryType],
         top_k: int = 5,
         window_id: Optional[str] = None,
+        query_types: Optional[List[MemoryType]] = None,
     ) -> List[Tuple[Memory, float]]:
         """
         Queries the memory system for memories of specified types.
 
         Args:
-            query_vector: The query vector.
-            query_types: A list of MemoryTypes to query.
+            query_vector: The query vector or text query.
             top_k: The number of top results to return.
             window_id: Optional window ID to filter episodic memories.
+            query_types: Optional list of MemoryTypes to query.
 
         Returns:
             A list of tuples, where each tuple contains a Memory object and its similarity score.
         """
         try:
+            # Convert query text to vector if needed
+            if isinstance(query_vector, str):
+                query_vector = await self.vector_operations.create_semantic_vector(query_vector)
+
+            # Validate query_vector
+            if not isinstance(query_vector, list) or not all(isinstance(x, float) for x in query_vector):
+                raise ValueError("query_vector must be a list of floats.")
             if len(query_vector) != 1536:
-                raise ValueError(
-                    "Query vector dimensionality does not match the index configuration."
-                )
+                raise ValueError("Query vector dimensionality must be 1536.")
 
-            filters = self.build_metadata_filter(
-                query_types=query_types, window_id=window_id
-            )
-            response = await self.pinecone_service.query_memory(
-                query_vector=query_vector, top_k=top_k, filters=filters
-            )
+            # Validate query_types
+            if query_types is not None:
+                if not all(isinstance(qt, MemoryType) for qt in query_types):
+                    raise ValueError("query_types must be a list of MemoryType enums or None.")
 
-            results = (
-                response.get("matches", []) if isinstance(response, dict) else response
-            )
+            # Validate top_k
+            if not isinstance(top_k, int) or top_k <= 0:
+                raise ValueError("top_k must be a positive integer.")
 
-            memories_with_scores = [
-                (self._create_memory_from_result(result), result["score"])
-                for result in results
-            ]
-            return self.rank_and_filter_results(memories_with_scores, top_k)
+            # Build metadata filter
+            filters = self.build_metadata_filter(query_types=query_types, window_id=window_id)
 
-        except ValueError as e:
-            logger.error(f"Error querying memory: {e}")
-            return []
+            # Perform the query using the provided filter
+            results = await self.pinecone_service.query_memory(query_vector, top_k=top_k, filter=filters)
+
+            # Process results into Memory objects with scores
+            memories_with_scores = []
+            for result in results:
+                try:
+                    memory = self._create_memory_from_result(result)
+                    memories_with_scores.append((memory, result["score"]))
+                except (ValueError, KeyError) as e:
+                    logger.warning(f"Error creating memory from result {result}: {e}")
+
+            return memories_with_scores
 
         except Exception as e:
             logger.error(f"Error querying memory: {e}")
             raise
+
 
     async def batch_embed_and_store(self, memories: List[Dict[str, Any]]):
         """
@@ -230,7 +262,7 @@ class MemorySystem:
             upsert_data = [
                 {
                     "id": memory_id,
-                    "values": vector,  # Updated to remove .tolist()
+                    "values": vector,
                     "metadata": metadata,
                 }
                 for memory_id, vector, metadata in zip(
@@ -248,7 +280,7 @@ class MemorySystem:
             raise RuntimeError(f"Error in batch embedding and storing memories: {e}")
 
     async def generate_prompt(
-        self, query: str, template_type: str, metadata: Optional[Dict[str, Any]] = None
+        self, query: str, metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Retrieves memories, formats them into a prompt template, and returns the full prompt.
@@ -280,18 +312,9 @@ class MemorySystem:
             [f"- {memory.content}" for memory, _ in ranked_memories]
         )
 
-        # Select the appropriate template
-        template = {
-            "research_context": RESEARCH_CONTEXT_TEMPLATE,
-            "personal_assistant": PERSONAL_ASSISTANT_TEMPLATE,
-        }.get(template_type)
-
-        if not template:
-            raise ValueError(f"Unknown template type: {template_type}")
-
-        # Format the prompt
+        # Format the prompt using only MASTER_TEMPLATE
         prompt = format_prompt(
-            template,
+            MASTER_TEMPLATE,
             retrieved_context=retrieved_context,
             user_query=query,
             **(metadata or {}),
@@ -407,3 +430,16 @@ class MemorySystem:
         except Exception as e:
             logger.error(f"Error getting memories by window ID: {e}")
             return []
+
+    def _update_last_dream_time(self, timestamp: datetime):
+        """Updates the last dream time."""
+        self.last_dream_time = timestamp
+
+    async def shutdown(self):
+        """Handles any cleanup tasks when shutting down."""
+        logger.info("Shutting down MemorySystem...")
+        # Add any cleanup logic here, like closing connections
+        if task_queue:
+            task_queue.shutdown()
+        if self.pinecone_service:
+            await self.pinecone_service.close_connections()  # Assuming you add a method to close connections in PineconeService

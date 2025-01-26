@@ -1,12 +1,10 @@
 import numpy as np
-from typing import Dict, Any, List, Optional
-from scipy.spatial.distance import cosine, euclidean
+from typing import List
+from scipy.spatial.distance import cosine
 import logging
-import asyncio
-from .memory.models import Memory, MemoryType
-import os
-from openai import OpenAI
-from api.utils import config
+from openai import OpenAI, AsyncOpenAI
+from api.utils.config import get_settings
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -14,31 +12,50 @@ class VectorOperations:
     """Vector operations for memory processing and analysis."""
 
     def __init__(self):
-      self.client = OpenAI(api_key=config.LLM_API_KEY)
+        self.client = AsyncOpenAI(api_key=get_settings().llm_api_key)
+        self.embedding_dim = 1536
+        self.default_model = "text-embedding-ada-002"
 
     async def create_semantic_vector(self, text: str) -> List[float]:
         """
         Create a semantic vector from text using OpenAI's embedding model.
+        Returns a 1536-dimensional zero vector if an error occurs or the embedding is empty.
         """
+        logger.info(f"Creating semantic vector for text: '{text}'")
         try:
             embedding = await self.generate_embedding(text)
-            logger.info(f"Length of embedding list: {len(embedding)}")
-            vector = np.array(embedding)
-            logger.info(f"Created semantic vector with dimensions: {vector.shape}")
+            if not embedding:
+                logger.error("Generated embedding is empty.")
+                return [0.0] * self.embedding_dim
+            if len(embedding) != self.embedding_dim:
+                logger.error(f"Generated embedding has incorrect dimensionality: {len(embedding)}")
+                return [0.0] * self.embedding_dim
+            logger.info(f"Embedding generated with length: {len(embedding)}")
+            logger.debug(f"Embedding: {embedding}")
             return embedding
         except Exception as e:
             logger.error(f"Error creating semantic vector: {e}")
-            raise
+            return [0.0] * self.embedding_dim
 
-    async def generate_embedding(self, text: str, model: str = "text-embedding-3-small") -> List[float]:
-        """
-        Generates an embedding vector for the given text using OpenAI API.
-        """
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=4, max=10),
+        retry=retry_if_exception_type(Exception),
+    )
+    async def generate_embedding(self, text: str, model: str = None) -> List[float]:
+        """Generate embeddings using OpenAI's API with retries."""
+        model = model or self.default_model
+        if not text:
+            logger.warning("Received empty text for embedding generation.")
+            return [0.0] * self.embedding_dim
+
         try:
             response = self.client.embeddings.create(input=text, model=model)
+            logger.debug(f"OpenAI Response: {response}")
             embedding = response.data[0].embedding
-            if len(embedding) != 1536:
-                logger.warning(f"Unexpected embedding dimensionality: {len(embedding)}")
+            if not embedding:
+                logger.error("Received empty embedding from OpenAI API.")
+                return [0.0] * self.embedding_dim
             return embedding
         except Exception as e:
             logger.error(f"Error in generate_embedding: {e}")
@@ -55,7 +72,7 @@ class VectorOperations:
         """Calculates the average of a list of vectors."""
         if not vectors:
             logger.warning("No vectors provided for averaging.")
-            return np.zeros(1536)
+            return np.zeros(self.embedding_dim)
         try:
             return np.mean(vectors, axis=0)
         except Exception as e:
@@ -89,23 +106,3 @@ class VectorOperations:
         except Exception as e:
             logger.error(f"Error normalizing vector: {e}", exc_info=True)
             raise
-    
-    def decay_vector(self, vector, created_at, decay_factor=config.MEMORY_DECAY_FACTOR, hours_since_decay=config.HOURS_SINCE_DECAY):
-        """
-        Decays a memory vector based on time.
-
-        Args:
-            vector: The memory vector (numpy array).
-            created_at: The timestamp when the memory was created.
-            decay_factor: The decay factor (applied per time unit).
-            hours_since_decay: The number of hours that represent a time unit for decay.
-
-        Returns:
-            The decayed vector.
-        """
-        now = time.time()
-        time_diff = now - created_at
-        hours_passed = time_diff / 3600  # Convert seconds to hours
-        decay_multiplier = decay_factor ** (hours_passed / hours_since_decay)
-        decayed_vector = vector * decay_multiplier
-        return decayed_vector

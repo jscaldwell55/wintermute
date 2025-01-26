@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from api.core.memory.models import Memory, MemoryType
 from api.core.evaluation import MemoryEvaluation
-from api.core.vector_operations import VectorOperations
+from api.core.vector.vector_operations import VectorOperations
 from sklearn.cluster import KMeans
 import numpy as np
 import os
@@ -28,7 +28,7 @@ class DreamSequence:
         self.vector_operations = vector_operations
         self.evaluation_module = evaluation_module
         self.last_dream_time_file = "last_dream_time.txt"
-        self.summarization_pipeline = pipeline("summarization", model="facebook/bart-large-cnn") # facebook/bart-large-cnn is a good default for summarization tasks
+        self.summarization_pipeline = pipeline("summarization", model=settings.get_setting("SUMMARY_MODEL_NAME"))
     
     def run_dream_sequence_task(self):
         """
@@ -36,8 +36,8 @@ class DreamSequence:
         """
         task_queue.enqueue(
             self.run_dream_sequence,
-            retries=config.SUMMARY_RETRIES,  # Use a config setting for retries if applicable
-            retry_delay=config.SUMMARY_RETRY_DELAY,  # Use a config setting for retry delay if applicable
+            retries=settings.get_setting("SUMMARY_RETRIES"),
+            retry_delay=settings.get_setting("SUMMARY_RETRY_DELAY"),
         )
 
     async def run_dream_sequence(self):
@@ -57,7 +57,7 @@ class DreamSequence:
             new_semantic_memories = []
             for pattern in patterns:
                 significance = await self._evaluate_pattern_significance(pattern)
-                if significance > config.SIGNIFICANCE_THRESHOLD:
+                if significance > settings.get_setting("SIGNIFICANCE_THRESHOLD"):
                     semantic_memory = await self._create_semantic_memory(pattern)
                     quality_metrics = (
                         await self.evaluation_module.evaluate_semantic_memory(
@@ -69,9 +69,9 @@ class DreamSequence:
                     # Check against thresholds defined in config.py
                     if (
                         quality_metrics["relevance"]
-                        > config.SEMANTIC_MEMORY_RELEVANCE_THRESHOLD
+                        > settings.get_setting("SEMANTIC_MEMORY_RELEVANCE_THRESHOLD")
                         and quality_metrics["coherence"]
-                        > config.SEMANTIC_MEMORY_COHERENCE_THRESHOLD
+                        > settings.get_setting("SEMANTIC_MEMORY_COHERENCE_THRESHOLD")
                     ):
                         new_semantic_memories.append(semantic_memory)
 
@@ -177,20 +177,20 @@ class DreamSequence:
             vectors_array = np.vstack(vectors)  # Convert list to numpy array
 
             # Ensure the number of clusters does not exceed the number of memories
-            max_clusters = min(config.KMEANS_N_CLUSTERS_MAX, len(vectors))
+            max_clusters = min(settings.get_setting("KMEANS_N_CLUSTERS_MAX"), len(vectors))
 
             # Initialize default clustering in case no better solution is found
             kmeans_default = KMeans(
-                n_clusters=config.KMEANS_N_CLUSTERS_MIN,  # Start with minimum of 2 clusters
-                init=config.KMEANS_INIT,
-                max_iter=config.KMEANS_MAX_ITER,
-                n_init=config.KMEANS_N_INIT,
+                n_clusters=settings.get_setting("KMEANS_N_CLUSTERS_MIN"),  # Start with minimum of 2 clusters
+                init=settings.get_setting("KMEANS_INIT"),
+                max_iter=settings.get_setting("KMEANS_MAX_ITER"),
+                n_init=settings.get_setting("KMEANS_N_INIT"),
                 random_state=0,
             )
             best_clusters = kmeans_default.fit_predict(vectors_array)
 
             # Try different numbers of clusters
-            for n_clusters in range(config.KMEANS_N_CLUSTERS_MIN, max_clusters + 1):
+            for n_clusters in range(settings.get_setting("KMEANS_N_CLUSTERS_MIN"), max_clusters + 1):
                 if len(vectors) < n_clusters:
                     logger.warning(f"Skipping clustering with {n_clusters} clusters due to insufficient samples.")
                     continue
@@ -199,9 +199,9 @@ class DreamSequence:
                 
                 kmeans = KMeans(
                     n_clusters=n_clusters,
-                    init=config.KMEANS_INIT,
-                    max_iter=config.KMEANS_MAX_ITER,
-                    n_init=config.KMEANS_N_INIT,
+                    init=settings.get_setting("KMEANS_INIT"),
+                    max_iter=settings.get_setting("KMEANS_MAX_ITER"),
+                    n_init=settings.get_setting("KMEANS_N_INIT"),
                     random_state=0,
                 )
                 labels = kmeans.fit_predict(vectors_array)

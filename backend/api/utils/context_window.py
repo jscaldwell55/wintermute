@@ -1,123 +1,93 @@
+import tiktoken
 import logging
-import uuid
-from typing import List
-
-import api.utils.config as config
-from api.utils.task_queue import task_queue
-import api.utils.llm_service as llm_service
-from api.core.memory.models import Memory  # Import Memory
-
-logger = logging.getLogger(__name__)
-
-class SimpleTokenizer:
-    @staticmethod
-    def count_tokens(text: str) -> int:
-        """
-        A simple tokenizer that approximates GPT tokens.
-        - Roughly 4 characters per token for English text
-        - Handles spaces and punctuation
-        """
-        return len(text.encode('utf-8')) // 4
+from typing import List, Tuple, Optional
+from api.utils.config import get_settings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 class ContextWindow:
-    def __init__(self, max_tokens: int = 4096):
-        """Initialize the context window with a maximum token limit."""
-        self.max_tokens = max_tokens
+    def __init__(self, max_tokens: Optional[int] = None):
+        settings = get_settings()
+        self.max_tokens = max_tokens or settings.get_setting("MAX_TOKENS_PER_CONTEXT_WINDOW")
+        self.encoding = tiktoken.get_encoding("cl100k_base")
+        self.window: List[Tuple[str, str]] = []
         self.current_token_count = 0
-        self.available_tokens = max_tokens
-        self.tokenizer = SimpleTokenizer()
-
-    def get_token_count(self, text: str) -> int:
-        """Returns the number of tokens in the given text."""
-        return self.tokenizer.count_tokens(text)
+        self.window_id = 0
 
     def add_q_r_pair(self, query: str, response: str) -> bool:
-        """Adds a Q/R pair to the context window, checking token count."""
-        q_r_text = f"Q: {query}\nA: {response}"
-        q_r_tokens = self.get_token_count(q_r_text)
+        """Adds a query and response pair to the context window."""
+        if not isinstance(query, str) or not isinstance(response, str):
+            raise ValueError("Query and Response must be strings.")
 
-        print(f"DEBUG: Adding Q/R pair: {q_r_tokens} tokens")
-        print(f"DEBUG: Current token count: {self.current_token_count}")
-        print(f"DEBUG: Available tokens: {self.available_tokens}")
-
-        if self.current_token_count + q_r_tokens <= self.available_tokens:
-            self.current_token_count += q_r_tokens
-            return True
-        else:
+        tokens = len(self.encoding.encode(query)) + len(self.encoding.encode(response))
+        if tokens > self.max_tokens:
             return False
 
-    async def generate_window_summary(
-        self, memories: List[Memory], window_id: str
-    ) -> str:
-        """
-        Generates a summary of the memories in the current context window using an LLM.
-
-        Args:
-            memories: A list of Memory objects representing the memories in the window.
-            window_id: ID of the window being summarized.
-
-        Returns:
-            A string containing the generated summary.
-        """
-        logger.info(f"Generating summary for window: {window_id}")
-
-        if not memories:
-            logger.info("No memories to summarize.")
-            return ""
-
-        memory_contents = [mem.content for mem in memories]
-        prompt = f"""
-        Summarize the following conversation excerpts:
-
-        {' '.join(memory_contents)}
-
-        Summary:
-        """
-        logger.info(f"Summary prompt: {prompt}")
-
-        try:
-            summary = await llm_service.generate_gpt_response_async(
-                prompt=prompt,
-                model=config.SUMMARY_LLM_MODEL_ID,
-                temperature=0.5,
-                max_tokens=config.SUMMARY_MAX_LENGTH,
-            )
-            logger.info(f"Generated summary: {summary}")
-
-            # Update the summary of the current `ContextWindow`
-            self.summary = summary.strip()
-
-            return self.summary
-
-        except Exception as e:
-            logger.error(f"Error generating window summary: {e}")
-            return ""
+        self.window.append((query, response))
+        self.current_token_count += tokens
+        return True
 
     def is_full(self) -> bool:
         """Checks if the context window is full."""
-        logger.debug(
-            f"Checking if full. Current count: {self.current_token_count}, Available: {self.available_tokens}"
-        )
-        return self.current_token_count >= self.available_tokens
+        return self.current_token_count >= self.max_tokens
 
-    @staticmethod
-    def reset_context(context_window: "ContextWindow") -> "ContextWindow":
+    async def generate_window_summary(self) -> str:
+        """Generates a summary of the current context window."""
+        if not self.window:
+            return ""
+
+        text = " ".join(f"Query: {q}\nResponse: {r}" for q, r in self.window)
+
+        # Assuming summarize is an async method, await it
+        summary = await self.summarize(text)
+        return summary
+
+    def reset_context(self):
+        """Resets the context window."""
+        self.window = []
+        self.current_token_count = 0
+        self.window_id += 1
+
+    async def summarize(self, text: str) -> str:
         """
-        Resets the provided context window, generating a new window ID and creating a new
-        ContextWindow instance.
+        Summarizes the given text using a summarization pipeline.
+
+        Args:
+            text: The text to summarize.
+
+        Returns:
+            The summary of the text.
         """
-        new_window_id = ContextWindow.generate_window_id()
-        logger.info(
-            f"Resetting context window from {context_window.window_id} to {new_window_id}"
-        )
-        return ContextWindow(
-            window_id=new_window_id,
-            max_tokens=context_window.max_tokens,
-            reserved_tokens=context_window.reserved_tokens,
-            template=context_window.template,
+        from transformers import pipeline
+
+        # Initialize the summarization pipeline
+        summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
+
+        # Split the text into chunks that fit within the model's maximum token limit
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1024,  # Adjust based on the model's max token limit
+            chunk_overlap=64,
+            length_function=len,
         )
 
-    @staticmethod
-    def generate_window_id():
-        """Generates a unique window ID."""
-        return str(uuid.uuid4())
+        chunks = text_splitter.split_text(text)
+
+        # Summarize each chunk
+        summaries = []
+        for chunk in chunks:
+            try:
+                summary = summarizer(
+                    chunk,
+                    max_length=150,  # Adjust based on your requirements
+                    min_length=50,   # Adjust based on your requirements
+                    do_sample=False
+                )[0]['summary_text']
+                summaries.append(summary)
+            except Exception as e:
+                logging.error(f"Error during summarization: {e}")
+                # Handle the error as appropriate for your application
+                # For example, you might want to return a partial summary or a default message
+
+        # Combine the summaries into a single summary
+        combined_summary = " ".join(summaries)
+
+        return combined_summary

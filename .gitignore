@@ -61,6 +61,7 @@ test-results/
 junit-report.xml
 htmlcov/
 pytestdebug.log
+tests/
 
 # Ignore compiled files
 *.o

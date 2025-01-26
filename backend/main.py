@@ -10,23 +10,26 @@ from pydantic import BaseModel
 
 # Core components
 from api.core.memory.memory import MemorySystem, MemoryType
-from api.core.vector_operations import VectorOperations
+from api.core.vector.vector_operations import VectorOperations
 from api.utils.context_window import ContextWindow
-from api.utils.dream_sequence import DreamSequence
+from api.core.scheduling.dream_sequence import DreamSequence
 from api.utils.pinecone_service import PineconeService
 from api.core.evaluation import MemoryEvaluation
-from api.core.models.vector import VectorModel # Add missing import
-from api.core.models.vector import MockVectorOperations # Add missing import
 import api.utils.llm_service as llm_service
 from api.utils.task_queue import task_queue
-from api.utils.config import settings  # Import settings first
+from api.utils.config import initialize_settings, settings  # Correct path to config
+
+if not settings:
+    raise RuntimeError("Settings were not initialized correctly.")
+
+logging.basicConfig(level=logging.INFO if settings.is_production else logging.DEBUG)
+
 
 # Prompt templates
 from api.utils.prompt_templates import (
     MASTER_TEMPLATE,
     format_prompt,
 )
-
 
 # Configure logging
 logging.basicConfig(level=logging.INFO if settings.is_production else logging.DEBUG)
@@ -57,61 +60,72 @@ class AddMemoryRequest(BaseModel):
     metadata: Dict = {}
     memory_type: MemoryType = MemoryType.EPISODIC
 
-async def initialize_components():
-    """Initializes necessary components for the application."""
-    global memory_system, context_window, vector_operations, evaluator, dream_sequence
+class SystemComponents:
+    def __init__(self):
+        self._initialized = False
+        self._lock = asyncio.Lock()
+        self.vector_operations = None
+        self.pinecone_service = None
+        self.memory_system = None
+        self.context_window = None
+        self.evaluator = None
+        self.dream_sequence = None
+        self.llm_service = None
 
-    logger.info("Initializing components...")
-    
-    # Initialize VectorModel
-    vector_model = VectorModel(settings.VECTOR_MODEL_ID, normalize=True)
+    async def initialize(self):
+        async with self._lock:
+            if not self._initialized:
+                self.vector_operations = VectorOperations()
+                self.pinecone_service = PineconeService(
+                    api_key=settings.get_setting("PINECONE_API_KEY"),
+                    environment=settings.get_setting("PINECONE_ENVIRONMENT"),
+                    index_name=settings.get_setting("INDEX_NAME")
+                )
+                self.memory_system = MemorySystem(
+                    pinecone_service=self.pinecone_service,
+                    vector_operations=self.vector_operations,
+                )
+                self.context_window = ContextWindow(
+                    max_tokens=settings.get_setting("MAX_TOKENS_PER_CONTEXT_WINDOW")
+                )
+                self.evaluator = MemoryEvaluation(self.vector_operations, self.memory_system)
+                self.dream_sequence = DreamSequence(
+                    memory_system=self.memory_system,
+                    vector_operations=self.vector_operations,
+                    evaluation_module=self.evaluator,
+                )
 
-    # Choose the vector operations implementation based on the environment
-    if settings.is_development:
-        vector_operations = MockVectorOperations(vector_model)
-    else:
-        vector_operations = VectorOperations(vector_model)
+                self._initialized = True
 
-    # Initialize PineconeService
-    pinecone_service = PineconeService(
-        api_key=settings.PINECONE_API_KEY,
-        environment=settings.PINECONE_ENVIRONMENT,
-        index_name=settings.INDEX_NAME
-    )
+    async def get_memory_system(self):
+        if not self._initialized:
+            await self.initialize()
+        return self.memory_system
 
-    # Initialize MemorySystem
-    memory_system = MemorySystem(
-        pinecone_service=pinecone_service,
-        vector_operations=vector_operations,
-        environment=settings.ENVIRONMENT
-    )
+    async def get_context_window(self):
+        if not self._initialized:
+            await self.initialize()
+        return self.context_window
 
-    # Initialize ContextWindow
-    context_window = ContextWindow(
-        window_id=ContextWindow.generate_window_id(),
-        max_tokens=settings.MAX_TOKENS_PER_CONTEXT_WINDOW,
-        template=MASTER_TEMPLATE,
-        summary="",
-        memories=[],
-        interactions=[]
-    )
+    async def get_vector_operations(self):
+        if not self._initialized:
+            await self.initialize()
+        return self.vector_operations
 
-    # Initialize MemoryEvaluation
-    evaluator = MemoryEvaluation(vector_operations, memory_system)
+    async def get_evaluator(self):
+        if not self._initialized:
+            await self.initialize()
+        return self.evaluator
 
-    # Initialize DreamSequence
-    dream_sequence = DreamSequence(
-        memory_system,
-        vector_operations,
-        evaluator,
-        settings.HUGGINGFACEHUB_API_TOKEN
-    )
-
-    logger.info("Components initialized successfully.")
+    async def get_dream_sequence(self):
+        if not self._initialized:
+            await self.initialize()
+        return self.dream_sequence
 
 async def run_dream_sequence_async():
     """Execute the dream sequence and update the last dream time."""
-    global memory_system
+    memory_system = await components.get_memory_system()
+    dream_sequence = await components.get_dream_sequence()
     logger.info("Initiating dream sequence.")
     try:
         await dream_sequence.run_dream_sequence()
@@ -122,9 +136,10 @@ async def run_dream_sequence_async():
 
 async def schedule_dream_sequence():
     """Schedule and manage dream sequence execution."""
+    memory_system = await components.get_memory_system()
     while True:
         now = datetime.utcnow()
-        next_run = memory_system.last_dream_time + timedelta(seconds=settings.DREAM_TIME_SECONDS)
+        next_run = memory_system.last_dream_time + timedelta(seconds=settings.get_setting("DREAM_TIME_SECONDS"))
         if now >= next_run:
             asyncio.create_task(run_dream_sequence_async())
             memory_system._update_last_dream_time(now)
@@ -134,14 +149,25 @@ async def schedule_dream_sequence():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI application."""
+    initialize_settings()
+    if not settings:
+        raise RuntimeError
     try:
-        await initialize_components()
+        await components.initialize()
         asyncio.create_task(schedule_dream_sequence())
         yield
     finally:
-        task_queue.shutdown()
+        if task_queue:
+            task_queue.shutdown()
+        if components.memory_system:
+            await components.memory_system.shutdown()
+        if components.pinecone_service:
+            await components.pinecone_service.close_connections()
 
 app = FastAPI(lifespan=lifespan)
+
+# Create a global instance of SystemComponents
+components = SystemComponents()
 
 # Add CORS middleware
 app.add_middleware(
@@ -167,6 +193,8 @@ async def log_requests(request: Request, call_next):
 @app.post("/memories")
 async def add_memory(request: AddMemoryRequest):
     """Adds a memory to the system."""
+    memory_system = await components.get_memory_system()
+    context_window = await components.get_context_window()
     try:
         memory_id = await memory_system.add_memory(
             content=request.content,
@@ -182,27 +210,37 @@ async def add_memory(request: AddMemoryRequest):
 @app.post("/query")
 async def query_memory(query: Query):
     """Process a query and return a response."""
-    global context_window
+    memory_system = await components.get_memory_system()
+    context_window = await components.get_context_window()
+    vector_operations = await components.get_vector_operations()
     logger.info(f"Received query: {query.prompt}")
 
     try:
         # Vectorize the query
-        query_vector = await vector_operations.embed_query(query.prompt)
+        query_vector = await vector_operations.create_semantic_vector(query.prompt)
 
-        # Query memories
+        # Query memories, passing lists of MemoryType enums
         episodic_memories = await memory_system.query_memory(
-            query_vector, query.top_k, MemoryType.EPISODIC
+            query_vector, top_k=query.top_k, query_types=[MemoryType.EPISODIC]
         )
         semantic_memories = await memory_system.query_memory(
-            query_vector, query.top_k, MemoryType.SEMANTIC
+            query_vector, top_k=query.top_k, query_types=[MemoryType.SEMANTIC]
         )
-        
+
         logger.info(f"Retrieved memories - Episodic: {len(episodic_memories)}, Semantic: {len(semantic_memories)}")
 
+        # Combine and rank the memories
+        all_memories = episodic_memories + semantic_memories
+
+        # Format the memories for the prompt template
+        retrieved_context = "\n".join(
+            [f"- {memory.content}" for memory, _ in all_memories]
+        )
+
         # Format prompt and generate response
-        formatted_prompt = format_prompt(MASTER_TEMPLATE, query.prompt, episodic_memories, semantic_memories)
-        response = await llm_service.generate_gpt_response_async(formatted_prompt, settings.LLM_MODEL_ID)
-        
+        formatted_prompt = format_prompt(MASTER_TEMPLATE, retrieved_context, query.prompt)
+        response = await llm_service.generate_gpt_response_async(formatted_prompt, settings.get_setting("LLM_MODEL_ID"))
+
         # Handle context window
         is_window_full = context_window.is_full()
         if is_window_full:
@@ -211,10 +249,10 @@ async def query_memory(query: Query):
                 context_window.generate_window_summary,
                 context_window.interactions,
                 context_window.window_id,
-                retries=settings.SUMMARY_RETRIES,
-                retry_delay=settings.SUMMARY_RETRY_DELAY
+                retries=settings.get_setting("SUMMARY_RETRIES"),
+                retry_delay=settings.get_setting("SUMMARY_RETRY_DELAY")
             )
-            context_window = ContextWindow.reset_context(context_window)
+            context_window = context_window.reset_context(context_window)
 
         # Add new episodic memory
         await memory_system.add_interaction_memory(query.prompt, response, context_window.window_id)
@@ -226,11 +264,12 @@ async def query_memory(query: Query):
         logger.error(f"Error during query processing: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process query: {e}")
     finally:
-        await asyncio.sleep(settings.SLEEP_TIME_AFTER_QUERY)
+        await asyncio.sleep(settings.get_setting("SLEEP_TIME_AFTER_QUERY"))
 
 @app.post("/delete")
 async def delete_memories(delete_request: DeleteRequest):
     """Delete memories based on provided criteria."""
+    memory_system = await components.get_memory_system()
     try:
         if delete_request.delete_all:
             await memory_system.delete_all_memories()

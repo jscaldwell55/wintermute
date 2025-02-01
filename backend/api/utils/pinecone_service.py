@@ -14,7 +14,7 @@ async def initialize_pinecone(api_key: str, environment: str, index_name: str, d
     """Initialize Pinecone and ensure index exists."""
     try:
         pinecone = Pinecone(api_key=api_key)
-        
+
         if index_name not in pinecone.list_indexes().names():
             logger.info(f"Creating index: {index_name}")
             pinecone.create_index(
@@ -23,11 +23,11 @@ async def initialize_pinecone(api_key: str, environment: str, index_name: str, d
                 metric="cosine",
                 spec=ServerlessSpec(cloud="aws", region=environment)
             )
-            
+
         index = pinecone.Index(index_name)
         logger.info(f"Pinecone index '{index_name}' initialized successfully.")
         return index
-        
+
     except Exception as e:
         logger.error(f"Error initializing Pinecone: {e}")
         raise RuntimeError(f"Error initializing Pinecone: {e}")
@@ -55,7 +55,7 @@ class PineconeService:
         """Upsert a single memory vector."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             if not isinstance(vector, (list, np.ndarray)) or len(vector) != 1536:
                 raise ValueError("Vector must be a list or numpy array with 1536 dimensions")
@@ -66,7 +66,7 @@ class PineconeService:
                 "values": vector_list,
                 "metadata": metadata
             }])
-            
+
         except Exception as e:
             logger.error(f"Error upserting memory: {str(e)}")
             raise
@@ -75,26 +75,26 @@ class PineconeService:
         """Upsert multiple memory vectors in batch."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             # Validate memories and convert to proper format
             upsert_data = []
             for memory in memories:
                 if not all(k in memory for k in ('id', 'values', 'metadata')):
                     raise ValueError("Each memory must have 'id', 'values', and 'metadata'")
-                    
+
                 values = memory['values']
                 if isinstance(values, np.ndarray):
                     values = values.tolist()
-                
+
                 upsert_data.append({
                     "id": memory['id'],
                     "values": values,
                     "metadata": memory['metadata']
                 })
-                
+
             await self.index.upsert(vectors=upsert_data)
-            
+
         except Exception as e:
             logger.error(f"Error batch upserting memories: {str(e)}")
             raise
@@ -108,7 +108,7 @@ class PineconeService:
         """Query memories with vector similarity search."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             results = await self.index.query(
                 vector=query_vector,
@@ -116,12 +116,12 @@ class PineconeService:
                 filter=filter,
                 include_metadata=True
             )
-            
+
             return [
                 (self._create_memory_from_result(match), match['score'])
                 for match in results['matches']
             ]
-            
+
         except Exception as e:
             logger.error(f"Error querying memory: {str(e)}")
             raise
@@ -130,20 +130,20 @@ class PineconeService:
         """Retrieve all memories with metadata."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             results = await self.index.query(
-                vector=[0.0] * 1536,
-                top_k=10000,
+                vector=[0.0] * 1536,  # Dummy vector for fetching all
+                top_k=10000,  # Adjust as needed to get all memories
                 include_metadata=True,
                 include_values=True
             )
-            
+
             return [
                 self._create_memory_from_result(match)
                 for match in results['matches']
             ]
-            
+
         except Exception as e:
             logger.error(f"Error fetching all memories: {str(e)}")
             raise
@@ -152,14 +152,14 @@ class PineconeService:
         """Retrieve a specific memory by ID."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             response = await self.index.fetch(ids=[memory_id])
             vectors = response.get('vectors', {})
             if memory_id in vectors:
                 return self._create_memory_from_result(vectors[memory_id])
             return None
-            
+
         except Exception as e:
             logger.error(f"Error fetching memory by ID: {str(e)}")
             raise
@@ -168,7 +168,7 @@ class PineconeService:
         """Delete a memory by ID."""
         if not self.index:
             await self.initialize_index()
-            
+
         try:
             await self.index.delete(ids=[memory_id])
         except Exception as e:
@@ -177,23 +177,23 @@ class PineconeService:
 
     def _create_memory_from_result(self, result: Dict[str, Any]) -> Memory:
         """Create Memory object from Pinecone result."""
-        metadata = result.get('metadata', {})
-        memory_type_str = metadata.get('memory_type', 'EPISODIC')
-        
+        metadata = result.get("metadata", {})
+        memory_type_str = metadata.get("memory_type", "EPISODIC")
+
         try:
             memory_type = MemoryType[memory_type_str.upper()]
         except (KeyError, ValueError):
             logger.warning(f"Invalid memory type '{memory_type_str}', using EPISODIC")
             memory_type = MemoryType.EPISODIC
-            
+
         return Memory(
-            id=result.get('id', ''),
-            content=metadata.get('content', ''),
-            created_at=metadata.get('created_at', datetime.now().isoformat()),
+            id=result.get("id", ""),
+            content=metadata.get("content", ""),
+            created_at=metadata.get("created_at", datetime.now().isoformat()),
             memory_type=memory_type,
-            semantic_vector=result.get('values', []),
+            semantic_vector=result.get("values", []),
             metadata=metadata,
-            window_id=metadata.get('window_id')
+            window_id=metadata.get("window_id")
         )
 
     async def close_connections(self):

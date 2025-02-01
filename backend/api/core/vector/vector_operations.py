@@ -1,108 +1,115 @@
-import numpy as np
+import os
 from typing import List
-from scipy.spatial.distance import cosine
-import logging
-from openai import OpenAI, AsyncOpenAI
+import numpy as np
+from openai import AsyncOpenAI
+from tenacity import retry, stop_after_attempt, wait_random_exponential
 from api.utils.config import get_settings
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import logging
 
 logger = logging.getLogger(__name__)
 
 class VectorOperations:
-    """Vector operations for memory processing and analysis."""
+    """
+    A class to handle various vector operations using OpenAI's embeddings.
+    """
 
     def __init__(self):
-        self.client = AsyncOpenAI(api_key=get_settings().llm_api_key)
-        self.embedding_dim = 1536
-        self.default_model = "text-embedding-ada-002"
+        """
+        Initializes the VectorOperations class with an OpenAI client.
+        """
+        self.settings = get_settings()
+        self.client = AsyncOpenAI(api_key=self.settings.llm_api_key)
+
+    @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
+    async def generate_embedding(self, text: str, model: str = None) -> List[float]:
+        """
+        Generates an embedding for a given text using the specified OpenAI model.
+
+        Args:
+            text: The text to generate an embedding for.
+            model: The ID of the OpenAI model to use for generating the embedding.
+
+        Returns:
+            A list of floats representing the embedding.
+        """
+        model = model or self.settings.vector_model_id
+        text = text.replace("\n", " ")
+        try:
+            response = await self.client.embeddings.create(input=[text], model=model)
+            return response.data[0].embedding
+        except Exception as e:
+            logger.error(f"Error generating embedding: {e}")
+            raise
 
     async def create_semantic_vector(self, text: str) -> List[float]:
         """
-        Create a semantic vector from text using OpenAI's embedding model.
-        Returns a 1536-dimensional zero vector if an error occurs or the embedding is empty.
+        Creates a semantic vector (embedding) for a given text using OpenAI's API.
+
+        Args:
+            text: The text to create a vector for.
+
+        Returns:
+            A list of floats representing the semantic vector.
         """
-        logger.info(f"Creating semantic vector for text: '{text}'")
-        try:
-            embedding = await self.generate_embedding(text)
-            if not embedding:
-                logger.error("Generated embedding is empty.")
-                return [0.0] * self.embedding_dim
-            if len(embedding) != self.embedding_dim:
-                logger.error(f"Generated embedding has incorrect dimensionality: {len(embedding)}")
-                return [0.0] * self.embedding_dim
-            logger.info(f"Embedding generated with length: {len(embedding)}")
-            logger.debug(f"Embedding: {embedding}")
-            return embedding
-        except Exception as e:
-            logger.error(f"Error creating semantic vector: {e}")
-            return [0.0] * self.embedding_dim
+        return await self.generate_embedding(text)  # Directly use generate_embedding
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
-        retry=retry_if_exception_type(Exception),
-    )
-    async def generate_embedding(self, text: str, model: str = None) -> List[float]:
-        """Generate embeddings using OpenAI's API with retries."""
-        model = model or self.default_model
-        if not text:
-            logger.warning("Received empty text for embedding generation.")
-            return [0.0] * self.embedding_dim
-
-        try:
-            response = self.client.embeddings.create(input=text, model=model)
-            logger.debug(f"OpenAI Response: {response}")
-            embedding = response.data[0].embedding
-            if not embedding:
-                logger.error("Received empty embedding from OpenAI API.")
-                return [0.0] * self.embedding_dim
-            return embedding
-        except Exception as e:
-            logger.error(f"Error in generate_embedding: {e}")
-            raise
-
-    async def create_combined_q_r_vector(self, query: str, response: str) -> List[float]:
+    def average_vectors(self, vectors: List[List[float]]) -> List[float]:
         """
-        Creates a single vector from a Q/R pair.
+        Calculates the average of a list of vectors.
+
+        Args:
+            vectors: A list of vectors, where each vector is a list of floats.
+
+        Returns:
+            A list of floats representing the average vector.
         """
-        combined_text = f"Q: {query}\nA: {response}"
-        return await self.create_semantic_vector(combined_text)
+        num_vectors = len(vectors)
+        if num_vectors == 0:
+            return []
 
-    def average_vectors(self, vectors: List[np.ndarray]) -> np.ndarray:
-        """Calculates the average of a list of vectors."""
-        if not vectors:
-            logger.warning("No vectors provided for averaging.")
-            return np.zeros(self.embedding_dim)
-        try:
-            return np.mean(vectors, axis=0)
-        except Exception as e:
-            logger.error(f"Error averaging vectors: {e}", exc_info=True)
-            raise
+        vector_length = len(vectors[0])
+        avg_vector = [0.0] * vector_length
 
-    @staticmethod
-    def cosine_similarity(vector1: np.ndarray, vector2: np.ndarray) -> float:
-        """Calculate cosine similarity between two vectors."""
-        if vector1.shape != vector2.shape:
-            raise ValueError("Vectors must have the same dimensions for cosine similarity calculation.")
+        for vector in vectors:
+            for i in range(vector_length):
+                avg_vector[i] += vector[i] / num_vectors
 
-        dot_product = np.dot(vector1, vector2)
-        magnitude_vector1 = np.linalg.norm(vector1)
-        magnitude_vector2 = np.linalg.norm(vector2)
+        return avg_vector
 
-        if magnitude_vector1 == 0 or magnitude_vector2 == 0:
-            return 0.0
+    def cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """
+        Calculates the cosine similarity between two vectors.
 
-        similarity = dot_product / (magnitude_vector1 * magnitude_vector2)
-        return similarity
+        Args:
+            vec1: The first vector.
+            vec2: The second vector.
 
-    @staticmethod
-    def normalize_vector(vector: np.ndarray) -> np.ndarray:
-        """Normalize a vector to unit length."""
-        try:
-            norm = np.linalg.norm(vector)
-            normalized_vector = vector / norm if norm > 0 else vector
-            logger.debug("Vector normalized.")
-            return normalized_vector
-        except Exception as e:
-            logger.error(f"Error normalizing vector: {e}", exc_info=True)
-            raise
+        Returns:
+            float: The cosine similarity between the two vectors.
+        """
+        if len(vec1) != len(vec2):
+            raise ValueError("Vectors must have the same dimension for cosine similarity.")
+
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        magnitude_vec1 = np.sqrt(sum(a * a for a in vec1))
+        magnitude_vec2 = np.sqrt(sum(b * b for b in vec2))
+
+        if magnitude_vec1 == 0 or magnitude_vec2 == 0:
+            return 0.0  # Handle cases where one or both vectors have zero magnitude
+
+        return dot_product / (magnitude_vec1 * magnitude_vec2)
+
+    def normalize_vector(self, vector: List[float]) -> List[float]:
+        """
+        Normalizes a vector to unit length.
+
+        Args:
+            vector: The vector to normalize.
+
+        Returns:
+            List[float]: The normalized vector.
+        """
+        magnitude = np.sqrt(sum(a * a for a in vector))
+        if magnitude == 0:
+            return vector  # Avoid division by zero for zero vectors
+        return [a / magnitude for a in vector]

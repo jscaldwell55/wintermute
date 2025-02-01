@@ -1,93 +1,85 @@
-import tiktoken
 import logging
 from typing import List, Tuple, Optional
 from api.utils.config import get_settings
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from collections import deque
 
-class ContextWindow:
-    def __init__(self, max_tokens: Optional[int] = None):
-        settings = get_settings()
-        self.max_tokens = max_tokens or settings.get_setting("MAX_TOKENS_PER_CONTEXT_WINDOW")
-        self.encoding = tiktoken.get_encoding("cl100k_base")
-        self.window: List[Tuple[str, str]] = []
+logger = logging.getLogger(__name__)
+
+class ContextWindowManager:
+    def __init__(self, memory_system, max_tokens: Optional[int] = None):
+        self.settings = get_settings()
+        self.memory_system = memory_system
+        self.max_tokens = max_tokens or self.settings.max_tokens_per_context_window
         self.current_token_count = 0
-        self.window_id = 0
+        self.recent_interactions = deque()  # Store recent interactions
+        self.retain_percentage = 0.3  # Keep 30% of window for recent interactions
+        self.active_window = deque()
 
-    def add_q_r_pair(self, query: str, response: str) -> bool:
-        """Adds a query and response pair to the context window."""
-        if not isinstance(query, str) or not isinstance(response, str):
-            raise ValueError("Query and Response must be strings.")
+    def add_interaction(self, interaction: Tuple[str, str]):
+        """Adds a new interaction (query, response) to the context window."""
+        interaction_tokens = self.count_tokens(str(interaction))
+        if self.current_token_count + interaction_tokens > self.max_tokens:
+            self.manage_window_size()
 
-        tokens = len(self.encoding.encode(query)) + len(self.encoding.encode(response))
-        if tokens > self.max_tokens:
-            return False
+        self.recent_interactions.append(interaction)
+        self.active_window.append(interaction)
+        self.current_token_count += interaction_tokens
+        logger.info("Added interaction to context window.")
 
-        self.window.append((query, response))
-        self.current_token_count += tokens
-        return True
+    async def add_memory(self, memory):
+        """Adds a memory to the context window and manages its size."""
+        memory_tokens = self.count_tokens(memory.content)
 
-    def is_full(self) -> bool:
-        """Checks if the context window is full."""
-        return self.current_token_count >= self.max_tokens
+        if self.current_token_count + memory_tokens > self.max_tokens:
+          await self.manage_window_size()
 
-    async def generate_window_summary(self) -> str:
-        """Generates a summary of the current context window."""
-        if not self.window:
-            return ""
+        self.active_window.append(memory)
+        self.current_token_count += memory_tokens
+        logger.info(f"Added memory to context window: {memory.id}")
 
-        text = " ".join(f"Query: {q}\nResponse: {r}" for q, r in self.window)
+    async def manage_window_size(self):
+        """Manages the size of the context window by paging out memories when it's full."""
+        logger.info("Managing context window size.")
+        retained_interactions = []
+        retained_tokens_count = 0
 
-        # Assuming summarize is an async method, await it
-        summary = await self.summarize(text)
-        return summary
+        # Preserve a portion of recent interactions
+        for interaction in reversed(list(self.recent_interactions)):
+            interaction_tokens = self.count_tokens(str(interaction))
+            if retained_tokens_count + interaction_tokens <= self.max_tokens * self.retain_percentage:
+                retained_interactions.insert(0, interaction)
+                retained_tokens_count += interaction_tokens
+            else:
+                break
+        
+        # Identify memories to page out (excluding recent interactions)
+        memories_to_page_out = [mem for mem in self.active_window if mem not in retained_interactions]
 
-    def reset_context(self):
-        """Resets the context window."""
-        self.window = []
-        self.current_token_count = 0
-        self.window_id += 1
+        # Page out the selected memories
+        await self.page_out_memories(memories_to_page_out)
 
-    async def summarize(self, text: str) -> str:
-        """
-        Summarizes the given text using a summarization pipeline.
+        # Update the active window
+        self.active_window = deque(retained_interactions)
+        self.current_token_count = retained_tokens_count
+        logger.info("Context window size managed.")
 
-        Args:
-            text: The text to summarize.
+    async def page_out_memories(self, memories_to_page_out):
+        """Pages out memories, generates summaries, and stores them in the LRU cache."""
+        for memory in memories_to_page_out:
+            # Generate a summary and store it in the LRU cache
+            summary = await self.memory_system.episodic_summarizer.generate_summary(memory.content)
+            self.memory_system.cache_manager.store_summary(memory.id, summary)
 
-        Returns:
-            The summary of the text.
-        """
-        from transformers import pipeline
+            # Store the full memory in long-term storage (Pinecone)
+            await self.memory_system.add_memory(
+                content=memory.content,
+                memory_type=memory.memory_type,
+                metadata=memory.metadata,
+                summary=summary['summary_text'],
+                summary_embedding=summary['embedding']
+            )
 
-        # Initialize the summarization pipeline
-        summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-
-        # Split the text into chunks that fit within the model's maximum token limit
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1024,  # Adjust based on the model's max token limit
-            chunk_overlap=64,
-            length_function=len,
-        )
-
-        chunks = text_splitter.split_text(text)
-
-        # Summarize each chunk
-        summaries = []
-        for chunk in chunks:
-            try:
-                summary = summarizer(
-                    chunk,
-                    max_length=150,  # Adjust based on your requirements
-                    min_length=50,   # Adjust based on your requirements
-                    do_sample=False
-                )[0]['summary_text']
-                summaries.append(summary)
-            except Exception as e:
-                logging.error(f"Error during summarization: {e}")
-                # Handle the error as appropriate for your application
-                # For example, you might want to return a partial summary or a default message
-
-        # Combine the summaries into a single summary
-        combined_summary = " ".join(summaries)
-
-        return combined_summary
+    def count_tokens(self, text):
+        """Counts the number of tokens in the given text."""
+        # Placeholder for your actual token counting logic
+        return len(text.split())

@@ -2,9 +2,9 @@ import os
 import logging
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
-from openai import OpenAI, OpenAIError
+from openai import AsyncOpenAI, OpenAIError
 from typing import Optional
-from api.utils.config import settings
+from api.utils.config import get_settings  # Import get_settings
 from api.utils.task_queue import task_queue
 from tenacity import retry, stop_after_attempt, wait_fixed
 
@@ -15,58 +15,14 @@ _client = None
 
 def _get_client():
     global _client
+    settings = get_settings()  # Use get_settings() to access settings
     if _client is None:
-        api_key = settings.LLM_API_KEY  # Access settings directly
+        api_key = settings.openai_api_key
         if not api_key:
             logger.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
             raise ValueError("OpenAI API key not configured.")
-        _client = OpenAI(api_key=api_key)
+        _client = AsyncOpenAI(api_key=api_key)
     return _client
-
-def generate_gpt_response(prompt: str, model: str = None, temperature: float = 0.7, max_tokens: int = 500) -> str:
-    """
-    Generates a GPT response using the OpenAI ChatCompletion API.
-
-    Args:
-        prompt: The prompt to send to the GPT model.
-        model: The name of the GPT model to use.
-        temperature: Sampling temperature for response randomness.
-        max_tokens: Maximum number of tokens in the generated response.
-
-    Returns:
-        The generated response from the GPT model as a string.
-    """
-    if not prompt.strip():
-        logger.error("Prompt cannot be empty.")
-        raise ValueError("Prompt cannot be empty.")
-
-    # Assign default model if not provided
-    if model is None:
-        model = settings.LLM_MODEL_ID
-
-    try:
-        client = _get_client()
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens
-        )
-
-        if hasattr(response.choices[0].message, 'content'):
-            generated_text = response.choices[0].message.content
-            logger.info(f"Generated GPT response for prompt: {prompt[:50]}...")
-            return generated_text
-        else:
-            logger.error(f"Invalid response structure from OpenAI: {response}")
-            return ""
-
-    except OpenAIError as oe:
-        logger.error(f"OpenAI API error: {oe}")
-        raise RuntimeError(f"OpenAI API error: {oe}")
-    except Exception as e:
-        logger.error(f"Unexpected error generating GPT response: {e}")
-        raise
 
 async def generate_gpt_response_async(prompt: str, model: str = None, temperature: float = 0.7, max_tokens: int = 500) -> str:
     """
@@ -82,25 +38,28 @@ async def generate_gpt_response_async(prompt: str, model: str = None, temperatur
         The generated response from the GPT model as a string.
     """
     logger.info("Starting async GPT response generation...")
-    loop = asyncio.get_event_loop()
 
     # Assign default model if not provided
+    settings = get_settings()
     if model is None:
-        model = settings.LLM_MODEL_ID
+        model = settings.llm_model_id
 
     try:
-        with ThreadPoolExecutor() as executor:
-            response = await loop.run_in_executor(
-                executor,
-                lambda: generate_gpt_response(
-                    prompt=prompt,
-                    model=model,
-                    temperature=temperature,
-                    max_tokens=max_tokens
-                )
-            )
-            logger.info("Async GPT response generated successfully.")
-            return response
+        client = _get_client()
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+        if hasattr(response.choices[0].message, 'content'):
+            generated_text = response.choices[0].message.content
+            logger.info(f"Generated GPT response for prompt: {prompt[:50]}...")
+            return generated_text
+        else:
+            logger.error(f"Invalid response structure from OpenAI: {response}")
+            return ""
 
     except OpenAIError as oe:
         logger.error(f"OpenAI API error during async generation: {oe}")

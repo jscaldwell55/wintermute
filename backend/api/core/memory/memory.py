@@ -7,16 +7,13 @@ from typing import Dict, List, Optional, Any, Tuple
 from api.core.memory.models import Memory, MemoryType
 from api.core.vector.vector_operations import VectorOperations
 from api.utils.pinecone_service import PineconeService
-from api.utils.prompt_templates import (
-    MASTER_TEMPLATE,
-    format_prompt,
-)
+from api.core.memory.summary import EpisodicSummarizer
+from api.core.memory.cache import LRUCacheManager
 import logging
 import numpy as np
 import uuid
 import asyncio
-import math
-from api.utils.config import settings
+from api.utils.config import get_settings
 from api.utils.task_queue import task_queue
 
 logger = logging.getLogger(__name__)
@@ -25,20 +22,29 @@ class MemorySystem:
     """Core memory system using Pinecone for storage."""
 
     def __init__(
-        self, pinecone_service: PineconeService, vector_operations: VectorOperations
+        self,
+        pinecone_service: PineconeService,
+        vector_operations: VectorOperations,
+        context_window,
+        episodic_summarizer: EpisodicSummarizer,
+        cache_manager: LRUCacheManager,
     ):
+        self.settings = get_settings()
         self.pinecone_service = pinecone_service
         self.vector_operations = vector_operations
-        self.retention_window = timedelta(days=7)
-        self.last_dream_time = datetime.utcnow() - timedelta(days=1)  # Initialize with an old timestamp
+        self.context_window = context_window
+        self.episodic_summarizer = episodic_summarizer
+        self.cache_manager = cache_manager
+        self.retention_window = timedelta(days=self.settings.delete_threshold_days)
+        self.last_dream_time = datetime.utcnow() - timedelta(days=1)
 
     async def add_memory(
         self,
         content: str,
         memory_type: MemoryType,
         metadata: Optional[Dict[str, Any]] = None,
-        window_id: Optional[str] = None,
-        task_id: Optional[str] = None,
+        summary: Optional[str] = None,
+        summary_embedding: Optional[List[float]] = None,
     ) -> str:
         """
         Adds a memory to the system, storing it directly in Pinecone.
@@ -47,7 +53,8 @@ class MemorySystem:
             content: The content of the memory.
             memory_type: The type of memory (EPISODIC or SEMANTIC).
             metadata: Optional metadata for the memory.
-            window_id: Optional window ID for episodic memories.
+            summary: Optional summary of the memory.
+            summary_embedding: Optional embedding of the summary.
 
         Returns:
             The unique ID of the added memory.
@@ -59,16 +66,12 @@ class MemorySystem:
                 raise ValueError("Metadata must be a dictionary.")
 
             # Generate semantic vector
-            semantic_vector = await self.vector_operations.create_semantic_vector(
-                content
-            )
+            semantic_vector = await self.vector_operations.create_semantic_vector(content)
             if len(semantic_vector) != 1536:
-                raise ValueError(
-                    "Generated semantic vector has incorrect dimensionality."
-                )
+                raise ValueError("Generated semantic vector has incorrect dimensionality.")
 
             # Generate a unique memory ID
-            memory_id = task_id or f"mem_{uuid.uuid4()}"
+            memory_id = f"mem_{uuid.uuid4()}"
 
             # Prepare metadata
             metadata = metadata or {}
@@ -77,14 +80,12 @@ class MemorySystem:
             # Update metadata with required fields
             full_metadata = {
                 "content": content,
+                "summary": summary,  # Add the summary to the metadata
+                "summary_embedding": summary_embedding,  # Add the summary embedding
                 "created_at": current_time,
-                "memory_type": memory_type.value,  # Store as string value
+                "memory_type": memory_type.value,
                 **(metadata),
             }
-
-            # Add window_id to metadata if provided
-            if window_id and memory_type == MemoryType.EPISODIC:
-                full_metadata["window_id"] = window_id
 
             # Create memory object
             memory = Memory(
@@ -94,13 +95,10 @@ class MemorySystem:
                 semantic_vector=semantic_vector,
                 metadata=full_metadata,
                 created_at=current_time,
-                window_id=window_id,
             )
 
             # Log and upsert
-            logger.info(
-                f"Upserting memory with ID: {memory_id} and metadata: {full_metadata}"
-            )
+            logger.info(f"Upserting memory with ID: {memory_id} and metadata: {full_metadata}")
 
             # Upsert to Pinecone
             await self.pinecone_service.upsert_memory(
@@ -115,16 +113,9 @@ class MemorySystem:
             logger.error(f"Error adding memory: {e}")
             raise RuntimeError(f"Error adding memory: {e}")
 
-    async def add_interaction_memory(
-        self, user_query: str, gpt_response: str, window_id: Optional[str] = None
-    ):
+    async def add_interaction_memory(self, user_query: str, gpt_response: str):
         """
-        Stores a user query and its corresponding GPT response as an interaction memory (episodic).
-
-        Args:
-            user_query: The user's query.
-            gpt_response: The response generated by GPT.
-            window_id: ID of current context window
+        Adds a user query and its corresponding GPT response as an interaction memory (episodic).
         """
         try:
             # Create combined vector for Q/R pair
@@ -164,8 +155,8 @@ class MemorySystem:
                 metadata={"interaction": True, "window_id": window_id},
                 window_id=window_id,
                 combined_vector=combined_vector,
-                retries=settings.get_setting("SUMMARY_RETRIES"),
-                retry_delay=settings.get_setting("SUMMARY_RETRY_DELAY"),
+                retries=self.settings.summary_retries,
+                retry_delay=self.settings.summary_retry_delay,
             )
 
             logger.info(
@@ -218,7 +209,21 @@ class MemorySystem:
             # Build metadata filter
             filters = self.build_metadata_filter(query_types=query_types, window_id=window_id)
 
-            # Perform the query using the provided filter
+            # First, check the LRU cache
+            cached_summaries = self.cache_manager.get_relevant_memories(query_vector)
+            if cached_summaries:
+                logger.info(f"Found {len(cached_summaries)} relevant summaries in LRU cache.")
+                # Retrieve full memories from Pinecone based on cached summaries
+                full_memories = await asyncio.gather(
+                    *[self.pinecone_service.get_memory_by_id(summary['memory_id']) for summary in cached_summaries]
+                )
+                # Combine memories with their scores from the cache
+                memories_with_scores = [
+                    (memory, summary['score']) for memory, summary in zip(full_memories, cached_summaries) if memory is not None
+                ]
+                return memories_with_scores
+
+            # If not in cache, query Pinecone
             results = await self.pinecone_service.query_memory(query_vector, top_k=top_k, filter=filters)
 
             # Process results into Memory objects with scores
@@ -226,6 +231,10 @@ class MemorySystem:
             for result in results:
                 try:
                     memory = self._create_memory_from_result(result)
+
+                    # Add the memory to the cache
+                    self.cache_manager.store_memory(memory)
+
                     memories_with_scores.append((memory, result["score"]))
                 except (ValueError, KeyError) as e:
                     logger.warning(f"Error creating memory from result {result}: {e}")
@@ -235,7 +244,6 @@ class MemorySystem:
         except Exception as e:
             logger.error(f"Error querying memory: {e}")
             raise
-
 
     async def batch_embed_and_store(self, memories: List[Dict[str, Any]]):
         """
@@ -411,6 +419,7 @@ class MemorySystem:
             memory_type=memory_type,
             semantic_vector=result.get("values", []),
             metadata=metadata,
+            window_id=metadata.get('window_id')
         )
 
     async def get_memories_by_window_id(self, window_id: str) -> List[Memory]:
@@ -442,4 +451,30 @@ class MemorySystem:
         if task_queue:
             task_queue.shutdown()
         if self.pinecone_service:
-            await self.pinecone_service.close_connections()  # Assuming you add a method to close connections in PineconeService
+            await self.pinecone_service.close_connections()
+
+# Example usage (you'll need to adapt this to your specific setup):
+# from api.utils.config import settings
+# from api.core.vector.vector_operations import VectorOperations
+# from api.utils.pinecone_service import PineconeService
+
+# Load settings and initialize components
+# settings = get_settings()
+# vector_operations = VectorOperations()
+# pinecone_service = PineconeService(api_key=settings.PINECONE_API_KEY, environment=settings.PINECONE_ENVIRONMENT, index_name=settings.INDEX_NAME)
+# memory_system = MemorySystem(pinecone_service, vector_operations)
+
+# Example usage
+# async def main():
+#     await pinecone_service.initialize_index()  # Initialize Pinecone index
+#     memory_id = await memory_system.add_memory("This is a test memory.", MemoryType.EPISODIC)
+#     print(f"Memory added with ID: {memory_id}")
+
+#     query_vector = [0.1, 0.2, 0.3, ...]  # Replace with actual query vector
+#     similar_memories = await memory_system.query_memory(query_vector)
+#     print(f"Similar memories: {similar_memories}")
+
+#     await memory_system.shutdown()  # Close connections when done
+
+# if __name__ == "__main__":
+#     asyncio.run(main())
